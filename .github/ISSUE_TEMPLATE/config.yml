@@ -1,0 +1,14 @@
+# .github/ISSUE_TEMPLATE/config.yml
+
+# Evita que se creen issues sin usar las plantillas de Features o Docs
+blank_issues_enabled: false
+
+# Enlaces externos para redirigir al equipo de QA/Dev al tablero correcto
+contact_links:
+  - name: "🐞 Report a Bug"
+    url: "https://github.com/orgs/MatCom-Developing-Team-10/projects/3"
+    about: "Bugs are tracked in a separate project. Click here to report an error or unexpected behavior."
+  
+  - name: "📊 View Features Roadmap"
+    url: "https://github.com/orgs/MatCom-Developing-Team-10/projects/1"
+    about: "Check the current status of all features and documentation tasks."
