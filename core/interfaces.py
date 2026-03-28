@@ -22,18 +22,28 @@ class IndexedCorpus:
     Attributes:
         documents: Original Document objects to store in the repository.
         processed_texts: Preprocessed text for each document (same order).
+<<<<<<< HEAD
             The indexer applies tokenization, lemmatization, stopword removal, etc.
         inverted_index: Mapping of term → list of (doc_index, term_frequency).
             Used to construct the TF-IDF matrix efficiently.
             Example: {'hipertensión': [(0, 2), (3, 1)], 'diabetes': [(1, 3), (2, 1)]}
         vocabulary: Ordered list of all unique terms. Maps term → term_index.
             This defines the column order of the TF-IDF matrix.
+=======
+            The indexer applies tokenization, stemming, stopword removal, etc.
+        vocabulary: Optional explicit term list. If None, TF-IDF discovers
+            the vocabulary automatically from processed_texts.
+>>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
     """
 
     documents: list[Document]
     processed_texts: list[str]
+<<<<<<< HEAD
     inverted_index: dict[str, list[tuple[int, int]]]
     vocabulary: list[str]
+=======
+    vocabulary: list[str] | None = None
+>>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
 
     def __post_init__(self) -> None:
         if len(self.documents) != len(self.processed_texts):
@@ -97,6 +107,7 @@ class DocumentStore(ABC):
         """
         raise NotImplementedError
 
+<<<<<<< HEAD
     def exists(self, doc_id: str) -> bool:
         """Check if a document exists without loading it.
 
@@ -126,6 +137,8 @@ class DocumentStore(ABC):
         """
         raise NotImplementedError("Delete not supported by this store")
 
+=======
+>>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
 
 class BaseRepository(ABC):
     """Protocol for vector storage and similarity search.

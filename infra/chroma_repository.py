@@ -67,6 +67,7 @@ class ChromaRepository(BaseRepository):
 
         Returns:
             List of (doc_id, score) tuples ranked by relevance.
+<<<<<<< HEAD
             Score is computed as 1 - distance (higher is better, range 0-1).
             Returns empty list if collection is empty or query fails.
         """
@@ -111,6 +112,23 @@ class ChromaRepository(BaseRepository):
             # Clamp to [0, 1] range for safety
             score = max(0.0, min(1.0, 1.0 - distance))
             ranked_results.append((doc_id, score))
+=======
+            Score is computed as 1 - distance (higher is better).
+        """
+        results = self.collection.query(
+            query_embeddings=[query_vector],
+            n_results=top_k,
+        )
+
+        ranked_results = []
+        if results["ids"] and len(results["ids"][0]) > 0:
+            for i in range(len(results["ids"][0])):
+                doc_id = results["ids"][0][i]
+                # Convert distance to similarity score (1 - distance)
+                # ChromaDB uses cosine distance by default
+                score = 1.0 - results["distances"][0][i]
+                ranked_results.append((doc_id, score))
+>>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
 
         return ranked_results
 
