@@ -4,10 +4,14 @@ Stores full document content as JSON files on disk, indexed by document ID.
 This provides fast, simple document retrieval decoupled from vector search.
 """
 
+<<<<<<< HEAD
 import hashlib
 import json
 import logging
 import re
+=======
+import json
+>>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +19,7 @@ from core.interfaces import DocumentStore
 from core.models import Document
 
 
+<<<<<<< HEAD
 logger = logging.getLogger(__name__)
 
 # Maximum length for a safe filename (conservative for cross-platform compatibility)
@@ -49,11 +54,18 @@ class FileSystemDocumentStore(DocumentStore):
     Document IDs are sanitized to prevent path traversal and ensure cross-platform
     compatibility. IDs with special characters or excessive length are hashed.
 
+=======
+class FileSystemDocumentStore(DocumentStore):
+    """Stores documents as individual JSON files on the filesystem.
+
+    Each document is saved as {doc_id}.json in the storage directory.
+>>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
     This provides:
         - Simple persistence without external dependencies
         - Fast random access by document ID
         - Easy inspection and debugging
         - Efficient for small to medium corpora (<100K documents)
+<<<<<<< HEAD
         - Security against path traversal attacks
 
     For production scale (>100K documents), consider migrating to SQLite or PostgreSQL.
@@ -61,6 +73,10 @@ class FileSystemDocumentStore(DocumentStore):
     Raises:
         DocumentWriteError: When a document cannot be saved to disk.
         DocumentReadError: When a document cannot be read from disk.
+=======
+
+    For production scale (>100K documents), consider migrating to SQLite or PostgreSQL.
+>>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
     """
 
     def __init__(self, storage_dir: str = "data/documents") -> None:
@@ -68,9 +84,12 @@ class FileSystemDocumentStore(DocumentStore):
 
         Args:
             storage_dir: Directory path where document JSON files will be stored.
+<<<<<<< HEAD
 
         Raises:
             OSError: If the directory cannot be created.
+=======
+>>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
         """
         self.storage_dir = Path(storage_dir)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
@@ -78,6 +97,7 @@ class FileSystemDocumentStore(DocumentStore):
     def add_documents(self, documents: list[Document]) -> None:
         """Store documents to disk as JSON files.
 
+<<<<<<< HEAD
         Each document is serialized to JSON and saved with a sanitized filename
         based on its doc_id. Existing documents with the same ID are overwritten.
 
@@ -113,6 +133,25 @@ class FileSystemDocumentStore(DocumentStore):
                 raise DocumentWriteError(
                     f"Cannot save document '{doc.doc_id}': {e}"
                 ) from e
+=======
+        Args:
+            documents: List of documents to persist.
+        """
+        for doc in documents:
+            doc_path = self._get_document_path(doc.doc_id)
+            with open(doc_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "doc_id": doc.doc_id,
+                        "text": doc.text,
+                        "url": doc.url,
+                        "metadata": doc.metadata,
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+>>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
 
     def get_by_id(self, doc_id: str) -> Optional[Document]:
         """Retrieve a single document by its ID.
@@ -122,14 +161,18 @@ class FileSystemDocumentStore(DocumentStore):
 
         Returns:
             Document if found, None if the file doesn't exist.
+<<<<<<< HEAD
 
         Raises:
             DocumentReadError: If the file exists but cannot be read or parsed.
+=======
+>>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
         """
         doc_path = self._get_document_path(doc_id)
         if not doc_path.exists():
             return None
 
+<<<<<<< HEAD
         try:
             with open(doc_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -154,17 +197,31 @@ class FileSystemDocumentStore(DocumentStore):
             raise DocumentReadError(
                 f"Cannot read document '{doc_id}': {e}"
             ) from e
+=======
+        with open(doc_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return Document(
+                doc_id=data["doc_id"],
+                text=data["text"],
+                url=data["url"],
+                metadata=data.get("metadata", {}),
+            )
+>>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
 
     def get_by_ids(self, doc_ids: list[str]) -> list[Document]:
         """Batch retrieve multiple documents by their IDs.
 
+<<<<<<< HEAD
         Documents are returned in the same order as the input IDs.
         Missing documents are skipped silently (logged at debug level).
 
+=======
+>>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
         Args:
             doc_ids: List of document IDs to fetch.
 
         Returns:
+<<<<<<< HEAD
             List of found documents. Missing IDs are skipped.
 
         Note:
@@ -254,4 +311,26 @@ class FileSystemDocumentStore(DocumentStore):
             safe_id = hash_digest[:32]  # 32 chars is plenty for uniqueness
             logger.debug(f"Hashed doc_id '{doc_id[:50]}...' -> {safe_id}")
 
+=======
+            List of found documents (missing IDs are skipped silently).
+        """
+        documents = []
+        for doc_id in doc_ids:
+            doc = self.get_by_id(doc_id)
+            if doc is not None:
+                documents.append(doc)
+        return documents
+
+    def _get_document_path(self, doc_id: str) -> Path:
+        """Compute the filesystem path for a document ID.
+
+        Args:
+            doc_id: Document identifier.
+
+        Returns:
+            Path object pointing to the JSON file.
+        """
+        # Sanitize doc_id to prevent path traversal attacks
+        safe_id = doc_id.replace("/", "_").replace("\\", "_")
+>>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
         return self.storage_dir / f"{safe_id}.json"

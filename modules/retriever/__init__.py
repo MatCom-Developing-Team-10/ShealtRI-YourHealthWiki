@@ -2,6 +2,13 @@
 
 from .lsi_model import LSIModel
 from .service import LSIRetriever
+<<<<<<< HEAD
 from .tfidf_processor import TfidfProcessor
 
 __all__ = ["LSIModel", "LSIRetriever", "TfidfProcessor"]
+=======
+from .spell_checker import TrieSpellChecker
+from .tfidf_processor import TfidfProcessor
+
+__all__ = ["LSIModel", "LSIRetriever", "TfidfProcessor", "TrieSpellChecker"]
+>>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
