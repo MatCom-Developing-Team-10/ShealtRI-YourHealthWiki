@@ -29,6 +29,7 @@ class Document:
 
     doc_id: str
     text: str
+    url: str
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
