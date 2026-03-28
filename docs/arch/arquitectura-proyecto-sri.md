@@ -180,9 +180,26 @@ Un equipo de 3 personas no necesita event buses, message queues, ni service mesh
 
 Ambos son defensibles, pero el segundo es más coherente con el módulo RAG.
 
-### Base de datos vectorial
+### Base de datos vectorial y almacenamiento
 
-Usar **ChromaDB** o **FAISS**. ChromaDB es más fácil de usar, FAISS es más rápido. No usar Pinecone ni nada que requiera servicio en la nube — el proyecto tiene que ser reproducible con Docker.
+Usar **ChromaDB** o **FAISS** para la búsqueda vectorial. ChromaDB es más fácil de usar, FAISS es más rápido. No usar Pinecone ni nada que requiera servicio en la nube — el proyecto tiene que ser reproducible con Docker.
+
+**Importante:** Implementar una **arquitectura de almacenamiento de dos niveles**:
+
+1. **Vector Store (ChromaDB):** Almacena solo IDs de documentos + embeddings + metadata mínima (URL)
+2. **Document Store (FileSystem/DB):** Almacena el contenido completo de documentos + metadata rica
+
+Esta separación ofrece múltiples beneficios:
+- **Escalabilidad:** ChromaDB no se infla con texto completo
+- **Flexibilidad:** Actualizar contenido sin re-indexar vectores
+- **Rendimiento:** Cada store optimizado para su propósito
+- **Mantenibilidad:** Separación clara de responsabilidades
+
+El retriever coordina ambos stores usando recuperación en dos fases:
+1. Búsqueda vectorial → retorna IDs + scores
+2. Fetch de contenido completo → retorna documentos
+
+Ver documentación detallada en [`docs/arch/almacenamiento-dos-niveles.md`](./almacenamiento-dos-niveles.md).
 
 ### Interfaz visual
 
