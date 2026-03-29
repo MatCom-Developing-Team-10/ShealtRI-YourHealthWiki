@@ -108,6 +108,9 @@ class DocumentStore(ABC):
         raise NotImplementedError
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
     def exists(self, doc_id: str) -> bool:
         """Check if a document exists without loading it.
 
@@ -137,8 +140,11 @@ class DocumentStore(ABC):
         """
         raise NotImplementedError("Delete not supported by this store")
 
+<<<<<<< HEAD
 =======
 >>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
+=======
+>>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
 
 class BaseRepository(ABC):
     """Protocol for vector storage and similarity search.
