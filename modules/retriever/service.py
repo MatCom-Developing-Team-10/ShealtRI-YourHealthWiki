@@ -51,6 +51,7 @@ class LSIRetriever(BaseRetriever):
     """
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     # Default similarity threshold - results below this score are filtered out
     DEFAULT_SIMILARITY_THRESHOLD = 0.4
 
@@ -131,6 +132,11 @@ class LSIRetriever(BaseRetriever):
         """Retrieve the top-k most relevant documents for a query.
 
 =======
+=======
+    # Default similarity threshold - results below this score are filtered out
+    DEFAULT_SIMILARITY_THRESHOLD = 0.4
+
+>>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
     def __init__(
         self,
         repository: BaseRepository,
@@ -141,6 +147,7 @@ class LSIRetriever(BaseRetriever):
         tfidf_max_features: int | None = 10_000,
         tfidf_min_df: int = 1,
         tfidf_max_df: float = 0.95,
+        similarity_threshold: float | None = None,
     ) -> None:
         """Initialize with repository, document store, and hyper-parameters.
 
@@ -154,12 +161,20 @@ class LSIRetriever(BaseRetriever):
                 the corpus supplies its own vocabulary).
             tfidf_min_df: Minimum document frequency for TF-IDF terms.
             tfidf_max_df: Maximum document frequency for TF-IDF terms.
+            similarity_threshold: Minimum similarity score (0-1) for results.
+                Results below this threshold are filtered out. If None, uses
+                DEFAULT_SIMILARITY_THRESHOLD (0.1).
         """
         self.repository = repository
         self.document_store = document_store
         self.model_dir = model_dir
         self.n_components = n_components
         self.max_spell_distance = max_spell_distance
+        self.similarity_threshold = (
+            similarity_threshold
+            if similarity_threshold is not None
+            else self.DEFAULT_SIMILARITY_THRESHOLD
+        )
 
         # Sub-components — initialized during fit or load
         self.tfidf: TfidfProcessor | None = None
@@ -218,7 +233,12 @@ class LSIRetriever(BaseRetriever):
     # Query
     # ------------------------------------------------------------------
 
-    def retrieve(self, query: Query, top_k: int = 10) -> list[RetrievedDocument]:
+    def retrieve(
+        self,
+        query: Query,
+        top_k: int = 10,
+        threshold: float | None = None,
+    ) -> list[RetrievedDocument]:
         """Retrieve the top-k most relevant documents for a query.
 
 >>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
@@ -226,6 +246,7 @@ class LSIRetriever(BaseRetriever):
             1. Vector similarity search → returns doc IDs and scores
             2. Fetch full documents from document store by IDs
 
+<<<<<<< HEAD
 <<<<<<< HEAD
         Results are filtered by similarity threshold and returned in ranked order
         (highest score first).
@@ -249,15 +270,24 @@ class LSIRetriever(BaseRetriever):
             RuntimeError: If the retriever has not been fitted or loaded.
             ValueError: If query.indexed_corpus is None.
 =======
+=======
+        Results are filtered by similarity threshold and returned in ranked order
+        (highest score first).
+
+>>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
         The query text is cleaned, spell-corrected, projected through
         TF-IDF → LSI, and used to search the vector repository.
 
         Args:
             query: User query.
-            top_k: Number of results to return.
+            top_k: Maximum number of results to return.
+            threshold: Minimum similarity score (0-1) for results. If None,
+                uses the instance's similarity_threshold. Results below this
+                threshold are filtered out.
 
         Returns:
-            Ranked list of retrieved documents with full text.
+            Ranked list of retrieved documents with full text, filtered by
+            similarity threshold and sorted by score (descending).
 
         Raises:
             RuntimeError: If the retriever has not been fitted or loaded.
@@ -268,6 +298,7 @@ class LSIRetriever(BaseRetriever):
                 "Retriever must be fitted or loaded before use."
             )
 
+<<<<<<< HEAD
 <<<<<<< HEAD
         if query.indexed_corpus is None:
             raise ValueError(
@@ -281,6 +312,11 @@ class LSIRetriever(BaseRetriever):
         # Phase 1: Vector similarity search
         query_tfidf = self.tfidf.transform(query.indexed_corpus)
 =======
+=======
+        # Use provided threshold or fall back to instance default
+        min_score = threshold if threshold is not None else self.similarity_threshold
+
+>>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
         # Phase 1: Vector similarity search
         clean_text = self._normalize_query(query.text)
         query_tfidf = self.tfidf.transform(clean_text)
@@ -294,6 +330,9 @@ class LSIRetriever(BaseRetriever):
             return []
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
         # Filter by similarity threshold
         filtered_results = [
             (doc_id, score) for doc_id, score in results if score >= min_score
@@ -302,6 +341,7 @@ class LSIRetriever(BaseRetriever):
         if not filtered_results:
             return []
 
+<<<<<<< HEAD
         # Phase 2: Fetch full documents from document store
         doc_ids = [doc_id for doc_id, _ in filtered_results]
         score_map = {doc_id: score for doc_id, score in filtered_results}
@@ -320,12 +360,16 @@ class LSIRetriever(BaseRetriever):
                     )
                 )
 =======
+=======
+>>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
         # Phase 2: Fetch full documents from document store
-        doc_ids = [doc_id for doc_id, _ in results]
-        score_map = {doc_id: score for doc_id, score in results}
+        doc_ids = [doc_id for doc_id, _ in filtered_results]
+        score_map = {doc_id: score for doc_id, score in filtered_results}
 
         documents = self.document_store.get_by_ids(doc_ids)
+        doc_map = {doc.doc_id: doc for doc in documents}
 
+<<<<<<< HEAD
         # Combine documents with their scores
         retrieved = [
             RetrievedDocument(document=doc, score=score_map[doc.doc_id])
@@ -333,6 +377,18 @@ class LSIRetriever(BaseRetriever):
             if doc.doc_id in score_map
         ]
 >>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
+=======
+        # Build result list preserving original ranking order from vector search
+        retrieved = []
+        for doc_id in doc_ids:
+            if doc_id in doc_map:
+                retrieved.append(
+                    RetrievedDocument(
+                        document=doc_map[doc_id],
+                        score=score_map[doc_id],
+                    )
+                )
+>>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
 
         return retrieved
 
@@ -366,6 +422,7 @@ class LSIRetriever(BaseRetriever):
         Loads TF-IDF vectorizer and SVD model from disk.
 =======
         max_spell_distance: int = 2,
+        similarity_threshold: float | None = None,
     ) -> "LSIRetriever":
         """Restore a fitted retriever from persisted artifacts.
 
@@ -382,7 +439,12 @@ class LSIRetriever(BaseRetriever):
                 If None, uses DEFAULT_SIMILARITY_THRESHOLD.
 =======
             max_spell_distance: Max edit distance for spelling correction.
+<<<<<<< HEAD
 >>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
+=======
+            similarity_threshold: Minimum similarity score for results.
+                If None, uses DEFAULT_SIMILARITY_THRESHOLD.
+>>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
 
         Returns:
             Ready-to-use ``LSIRetriever`` instance.
@@ -400,6 +462,7 @@ class LSIRetriever(BaseRetriever):
 
 =======
             max_spell_distance=max_spell_distance,
+            similarity_threshold=similarity_threshold,
         )
         instance.tfidf = TfidfProcessor.load(model_dir)
         instance.model = LSIModel.load(model_dir)
