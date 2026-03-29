@@ -93,6 +93,35 @@ class DocumentStore(ABC):
         """
         raise NotImplementedError
 
+    def exists(self, doc_id: str) -> bool:
+        """Check if a document exists without loading it.
+
+        Default implementation uses get_by_id. Subclasses may override
+        for more efficient existence checks.
+
+        Args:
+            doc_id: Document identifier.
+
+        Returns:
+            True if the document exists, False otherwise.
+        """
+        return self.get_by_id(doc_id) is not None
+
+    def delete(self, doc_id: str) -> bool:
+        """Delete a document from storage.
+
+        Args:
+            doc_id: Document identifier.
+
+        Returns:
+            True if the document was deleted, False if it didn't exist.
+
+        Note:
+            Default implementation raises NotImplementedError.
+            Subclasses should override if deletion is supported.
+        """
+        raise NotImplementedError("Delete not supported by this store")
+
 
 class BaseRepository(ABC):
     """Protocol for vector storage and similarity search.
