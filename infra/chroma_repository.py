@@ -67,21 +67,50 @@ class ChromaRepository(BaseRepository):
 
         Returns:
             List of (doc_id, score) tuples ranked by relevance.
-            Score is computed as 1 - distance (higher is better).
+            Score is computed as 1 - distance (higher is better, range 0-1).
+            Returns empty list if collection is empty or query fails.
         """
-        results = self.collection.query(
-            query_embeddings=[query_vector],
-            n_results=top_k,
-        )
+        try:
+            results = self.collection.query(
+                query_embeddings=[query_vector],
+                n_results=top_k,
+            )
+        except Exception as e:
+            # Log error and return empty results rather than crashing
+            import logging
+            logging.getLogger(__name__).error(f"ChromaDB query failed: {e}")
+            return []
 
         ranked_results = []
-        if results["ids"] and len(results["ids"][0]) > 0:
-            for i in range(len(results["ids"][0])):
-                doc_id = results["ids"][0][i]
-                # Convert distance to similarity score (1 - distance)
-                # ChromaDB uses cosine distance by default
-                score = 1.0 - results["distances"][0][i]
-                ranked_results.append((doc_id, score))
+
+        # Validate response structure
+        if not results or not results.get("ids") or not results["ids"]:
+            return []
+
+        ids = results["ids"][0]
+        distances = results.get("distances", [[]])[0]
+
+        # Ensure we have matching lengths
+        if len(ids) != len(distances):
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Mismatched results: {len(ids)} ids vs {len(distances)} distances"
+            )
+            return []
+
+        for i in range(len(ids)):
+            doc_id = ids[i]
+            distance = distances[i]
+
+            # Handle potential None or invalid distance values
+            if distance is None:
+                continue
+
+            # Convert distance to similarity score (1 - distance)
+            # ChromaDB uses cosine distance (0 = identical, 2 = opposite)
+            # Clamp to [0, 1] range for safety
+            score = max(0.0, min(1.0, 1.0 - distance))
+            ranked_results.append((doc_id, score))
 
         return ranked_results
 

@@ -1,5 +1,15 @@
 """Indexer module for document storage and preprocessing."""
 
-from .document_store import FileSystemDocumentStore
+from .document_store import (
+    DocumentReadError,
+    DocumentStoreError,
+    DocumentWriteError,
+    FileSystemDocumentStore,
+)
 
-__all__ = ["FileSystemDocumentStore"]
+__all__ = [
+    "FileSystemDocumentStore",
+    "DocumentStoreError",
+    "DocumentWriteError",
+    "DocumentReadError",
+]
