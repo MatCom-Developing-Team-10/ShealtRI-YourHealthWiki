@@ -49,18 +49,27 @@ sri-project/
 │   └── exceptions.py
 │
 ├── modules/                       # Módulos obligatorios del pipeline
+│   ├── document_loader/           # Carga de documentos
+│   │   ├── __init__.py
+│   │   └── service.py             ← DocumentLoader (JSON, directorio)
+│   ├── text_processor/            # Preprocesamiento de texto
+│   │   ├── __init__.py
+│   │   ├── service.py             ← TextProcessor (NLTK español)
+│   │   └── stopwords.py           ← Stopwords español + dominio
+│   ├── indexer/                   # Construcción de corpus
+│   │   ├── __init__.py
+│   │   ├── service.py             ← IndexerService → IndexedCorpus
+│   │   └── document_store.py      ← FileSystemDocumentStore
+│   ├── retriever/                 # Modelo LSI
+│   │   ├── __init__.py
+│   │   ├── service.py             ← LSIRetriever (orquestador)
+│   │   ├── tfidf_processor.py     ← TfidfVectorizer wrapper
+│   │   ├── lsi_model.py           ← TruncatedSVD wrapper
+│   │   └── spell_checker.py       ← Trie para corrección ortográfica
 │   ├── crawler/
 │   │   ├── __init__.py
 │   │   ├── service.py
 │   │   └── models.py
-│   ├── indexer/
-│   │   ├── __init__.py
-│   │   ├── service.py
-│   │   └── inverted_index.py
-│   ├── retriever/
-│   │   ├── __init__.py
-│   │   ├── service.py
-│   │   └── lsi_model.py           # (o el modelo no básico elegido)
 │   ├── ranker/
 │   │   ├── __init__.py
 │   │   ├── service.py
@@ -79,7 +88,7 @@ sri-project/
 │   └── multimodal/
 │
 ├── infra/                         # Infraestructura / capa de datos
-│   ├── vector_db.py
+│   ├── chroma_repository.py       ← ChromaDB vector store
 │   ├── embedding.py
 │   ├── storage.py
 │   └── database.py
@@ -141,6 +150,56 @@ Recibe la consulta, la pasa por cada etapa en orden, y en cada punto de enganche
 
 ---
 
+## Flujo de indexación de documentos
+
+El pipeline de indexación prepara los documentos para el modelo LSI:
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│ DocumentLoader  │ →  │ TextProcessor   │ →  │ IndexerService  │
+│                 │    │                 │    │                 │
+│ load_from_dir() │    │ tokenize()      │    │ build()         │
+│ load_from_json()│    │ remove_stops()  │    │                 │
+│                 │    │ stem()          │    │ → IndexedCorpus │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+        ↓                      ↓                      ↓
+   list[Document]      processed text         IndexedCorpus
+                       (tokens stemmed)       ├── documents
+                                              └── processed_texts
+```
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│ TfidfProcessor  │ →  │   LSIModel      │ →  │ ChromaRepository│
+│                 │    │                 │    │                 │
+│ fit(corpus)     │    │ fit(tfidf_mat)  │    │ add_documents() │
+│                 │    │                 │    │                 │
+│ → sparse matrix │    │ → doc vectors   │    │ → stored in DB  │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+### Ejemplo de uso
+
+```python
+from modules.document_loader import DocumentLoader
+from modules.text_processor import TextProcessor
+from modules.indexer import IndexerService
+
+# 1. Cargar documentos
+loader = DocumentLoader()
+documents = loader.load_from_directory("data/raw/")
+
+# 2. Preprocesar y construir corpus
+processor = TextProcessor()  # NLTK español: tokenize, stopwords, stem
+indexer = IndexerService(text_processor=processor)
+corpus = indexer.build(documents)
+
+# 3. Entrenar retriever
+retriever.fit(corpus)
+```
+
+---
+
 ## Flujo de una consulta con hooks de plugins
 
 ![Flujo](flow.png)
@@ -180,9 +239,26 @@ Un equipo de 3 personas no necesita event buses, message queues, ni service mesh
 
 Ambos son defensibles, pero el segundo es más coherente con el módulo RAG.
 
-### Base de datos vectorial
+### Base de datos vectorial y almacenamiento
 
-Usar **ChromaDB** o **FAISS**. ChromaDB es más fácil de usar, FAISS es más rápido. No usar Pinecone ni nada que requiera servicio en la nube — el proyecto tiene que ser reproducible con Docker.
+Usar **ChromaDB** o **FAISS** para la búsqueda vectorial. ChromaDB es más fácil de usar, FAISS es más rápido. No usar Pinecone ni nada que requiera servicio en la nube — el proyecto tiene que ser reproducible con Docker.
+
+**Importante:** Implementar una **arquitectura de almacenamiento de dos niveles**:
+
+1. **Vector Store (ChromaDB):** Almacena solo IDs de documentos + embeddings + metadata mínima (URL)
+2. **Document Store (FileSystem/DB):** Almacena el contenido completo de documentos + metadata rica
+
+Esta separación ofrece múltiples beneficios:
+- **Escalabilidad:** ChromaDB no se infla con texto completo
+- **Flexibilidad:** Actualizar contenido sin re-indexar vectores
+- **Rendimiento:** Cada store optimizado para su propósito
+- **Mantenibilidad:** Separación clara de responsabilidades
+
+El retriever coordina ambos stores usando recuperación en dos fases:
+1. Búsqueda vectorial → retorna IDs + scores
+2. Fetch de contenido completo → retorna documentos
+
+Ver documentación detallada en [`docs/arch/almacenamiento-dos-niveles.md`](./almacenamiento-dos-niveles.md).
 
 ### Interfaz visual
 

@@ -145,7 +145,7 @@ El plugin solo existe si se registra. Sin registro = sin efecto.
 - [ ] La interfaz ABC está definida en `src/core/interfaces.py`
 - [ ] El servicio implementa TODOS los métodos abstractos
 - [ ] Type hints en todas las funciones públicas
-- [ ] Docstrings en español (formato Google style)
+- [ ] Docstrings in English (Google style format)
 - [ ] `__init__.py` exporta la clase principal
 - [ ] El módulo es testeable de forma aislada (sin dependencias duras a otros módulos)
 - [ ] Si es plugin: el hook_name es uno de los válidos
