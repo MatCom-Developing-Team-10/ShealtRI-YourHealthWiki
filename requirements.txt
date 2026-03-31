@@ -1,4 +1,41 @@
+# Core dependencies for SRI system
+# ==================================================
+
+# Data & Numerics
 numpy>=1.26.0
-scikit-learn>=1.5.0
-joblib>=1.4.0
-pytest>=8.2.0
+scipy>=1.13.0
+
+# Machine Learning & NLP
+scikit-learn>=1.5.0          # TF-IDF, TruncatedSVD for LSI model
+sentence-transformers>=3.0.0  # Embeddings for RAG and semantic search
+nltk>=3.8.0                  # Natural language processing utilities
+
+# Persistence & Serialization
+joblib>=1.4.0                # Model persistence
+
+# Vector Database & Storage
+chromadb>=0.5.0              # Vector database for embeddings and document retrieval
+
+# RAG & LLM Integration
+langchain>=0.1.0             # Framework for LLM pipelines and RAG
+langchain-community>=0.0.0   # Community integrations for LangChain
+python-dotenv>=1.0.0         # Environment configuration
+
+# Web Crawling & HTTP
+requests>=2.31.0             # HTTP library for web requests
+beautifulsoup4>=4.12.0       # HTML/XML parsing for crawler
+
+# User Interface (optional, for Corte 3)
+streamlit>=1.28.0            # Streamlit for UI or
+# gradio>=3.50.0             # Alternative: Gradio for UI
+
+# Testing & Development
+pytest>=8.2.0                # Unit testing framework
+pytest-cov>=4.1.0            # Coverage reporting for tests
+
+# Utilities
+python-dateutil>=2.8.0       # Date utilities
+pydantic>=2.0.0              # Data validation (optional, recommended for config)
+
+# Production (when using Docker)
+# gunicorn>=21.0.0            # WSGI server for production deployment
