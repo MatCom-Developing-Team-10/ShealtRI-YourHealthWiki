@@ -44,17 +44,23 @@ class BaseScraper(ABC):
         1. Set ``domain`` to the hostname (e.g., "www.mayoclinic.org").
         2. Set ``source_name`` to the snake_case source identifier
            (e.g., "mayo_clinic"). This becomes the JSONL filename.
-        3. Implement ``scrape()`` to parse HTML and return a Document
+        3. Set ``sitemap_urls`` to the list of XML sitemaps for this source.
+           Override ``get_sitemap_urls()`` instead if the list must be built
+           at runtime.
+        4. Implement ``scrape()`` to parse HTML and return a Document
            with the required metadata keys (see module docstring).
-        4. Return None from ``scrape()`` for pages with no useful content
+        5. Return None from ``scrape()`` for pages with no useful content
            (index pages, login walls, 404 pages, etc.).
-        5. Override ``can_handle()`` if domain-level matching is insufficient
+        6. Override ``can_handle()`` if domain-level matching is insufficient
            (e.g., you only handle a specific path prefix).
 
     Example:
         class MayoClinicScraper(BaseScraper):
             domain = "www.mayoclinic.org"
             source_name = "mayo_clinic"
+            sitemap_urls = [
+                "https://www.mayoclinic.org/sitemap/condition_consolidated_concepts.xml",
+            ]
 
             def scrape(self, url: str, html: str) -> Document | None:
                 soup = BeautifulSoup(html, "lxml")
@@ -68,6 +74,10 @@ class BaseScraper(ABC):
     #: Snake_case identifier used as the JSONL filename in data/raw/.
     #: Must be set as a class attribute in every subclass.
     source_name: str
+
+    #: XML sitemap URLs the crawler should fetch to discover article URLs.
+    #: Override get_sitemap_urls() when the list must be built at runtime.
+    sitemap_urls: list[str] = []
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Enforce that subclasses declare domain and source_name."""
@@ -99,6 +109,19 @@ class BaseScraper(ABC):
             See module docstring for the full contract.
         """
         ...
+
+    def get_sitemap_urls(self) -> list[str]:
+        """Return the sitemap URLs used to seed the crawl for this source.
+
+        The default implementation returns a copy of the ``sitemap_urls``
+        class attribute. Override this method when the URL list must be
+        constructed at runtime (e.g., paginated sitemaps, date-range feeds).
+
+        Returns:
+            List of absolute XML sitemap URLs (urlset or sitemapindex format).
+            Return an empty list if this scraper does not use sitemaps.
+        """
+        return list(self.sitemap_urls)
 
     def can_handle(self, url: str) -> bool:
         """Check whether this scraper should process a given URL.
