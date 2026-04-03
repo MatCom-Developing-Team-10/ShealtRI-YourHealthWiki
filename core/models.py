@@ -1,7 +1,12 @@
 """Shared domain models for the SRI pipeline."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from core.interfaces import IndexedCorpus
 
 
 @dataclass(slots=True)
@@ -10,10 +15,13 @@ class Query:
 
     Attributes:
         text: Raw query string entered by the user.
+        indexed_corpus: Preprocessed query as IndexedCorpus for retrieval.
+            Built by the pipeline before calling the retriever.
         metadata: Optional metadata associated with the query.
     """
 
     text: str
+    indexed_corpus: IndexedCorpus | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
