@@ -1,4 +1,4 @@
-"""Trie-based spell checker used before LSI query vectorization."""
+"""Trie-based spell checker for medical queries."""
 
 from __future__ import annotations
 
@@ -7,19 +7,23 @@ from dataclasses import dataclass, field
 
 @dataclass(slots=True)
 class _TrieNode:
-    children: dict[str, "_TrieNode"] = field(default_factory=dict)
+    children: dict[str, _TrieNode] = field(default_factory=dict)
     is_end: bool = False
 
 
 class TrieSpellChecker:
-    """Simple spell checker constrained by corpus vocabulary."""
+    """Spell checker constrained by corpus vocabulary.
+
+    Corrects misspelled words by finding the closest match in the vocabulary
+    using Levenshtein distance. Used during query processing.
+    """
 
     def __init__(self, vocabulary: list[str] | None = None, max_distance: int = 2) -> None:
         """Initialize with vocabulary.
 
         Args:
-            vocabulary: Initial list of words.
-            max_distance: Max edit distance for correction.
+            vocabulary: List of valid words from the corpus.
+            max_distance: Maximum edit distance for corrections (default: 2).
         """
         self.root = _TrieNode()
         self.max_distance = max_distance
@@ -27,7 +31,11 @@ class TrieSpellChecker:
             self.fit(vocabulary)
 
     def fit(self, vocabulary: list[str]) -> None:
-        """Populate the Trie with a list of words."""
+        """Populate the Trie with a list of valid words.
+
+        Args:
+            vocabulary: List of valid words to add to the Trie.
+        """
         for word in vocabulary:
             self._insert(word)
 
@@ -69,39 +77,43 @@ class TrieSpellChecker:
 
         return previous_row[-1]
 
-    def correct(self, word: str) -> str:
-        """Return the closest known vocabulary word or the original token."""
+    def correct(self, word: str) -> str | None:
+        """Return the closest known vocabulary word or None if not found.
+
+        Args:
+            word: Word to correct.
+
+        Returns:
+            The closest matching word from vocabulary, or None if no match
+            within max_distance is found.
+        """
         if self._contains(word):
             return word
 
-        # Simple exhaustive search for now (could be optimized with Trie branch pruning)
-        # For a small/medium medical vocabulary, this might be okay.
-        best_word = word
-        min_dist = self.max_distance + 1
-
-        # This is a naive implementation. A better one would traverse the Trie.
-        # But for now, let's keep it simple or implement the Trie traversal if needed.
-        # Let's do a simple recursive Trie search with distance pruning.
-        
         results = []
         self._search_recursive(self.root, "", word, results)
-        
+
         if not results:
-            return word
-            
-        # Return the one with minimum distance
+            return None
+
+        # Return the closest match
         results.sort(key=lambda x: x[1])
         return results[0][0]
 
-    def _search_recursive(self, node: _TrieNode, current_word: str, target: str, results: list[tuple[str, int]]):
+    def _search_recursive(
+        self,
+        node: _TrieNode,
+        current_word: str,
+        target: str,
+        results: list[tuple[str, int]],
+    ) -> None:
+        """Recursively search Trie for words close to target."""
         dist = self._levenshtein(current_word, target)
-        
+
         if dist <= self.max_distance and node.is_end:
             results.append((current_word, dist))
-            
-        # Pruning: if current_word is already too different, we might still want to continue 
-        # because adding/deleting chars might decrease distance. 
-        # But usually, if len(current_word) > len(target) + max_distance, we can stop.
+
+        # Prune branches that are too different
         if len(current_word) > len(target) + self.max_distance:
             return
 
