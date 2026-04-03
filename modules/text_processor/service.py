@@ -1,12 +1,19 @@
-"""Text preprocessing pipeline for Spanish medical documents using NLTK.
+"""Text preprocessing pipeline for Spanish medical documents using spaCy.
 
 This module provides text preprocessing for the LSI indexing pipeline:
-    Raw text → normalize → tokenize → remove stopwords → stem → filtered tokens
+    Raw text → normalize → tokenize → remove stopwords → lemmatize → filter → [spell-check/add to vocab]
 
 Usage:
     processor = TextProcessor()
+
+    # For documents: tokens are added to spell checker vocabulary
     processed = processor.process("La hipertensión arterial causa cefalea")
-    # Returns: "hipertens arter caus cefale"
+    # Returns: "hipertensión arterial causar cefalea"
+    # Tokens added to spell_checker if configured
+
+    # For queries: tokens are corrected using known vocabulary
+    processed = processor.process("hipertensoin", is_query=True)
+    # Returns: "hipertensión" (corrected from vocabulary)
 """
 
 from __future__ import annotations
@@ -17,9 +24,11 @@ import unicodedata
 from dataclasses import dataclass, field
 
 import nltk
-from nltk.stem import SnowballStemmer
-from nltk.tokenize import word_tokenize
+import spacy
+from nltk.corpus import stopwords as nltk_stopwords
+from spacy.language import Language
 
+from .spell_checker import TrieSpellChecker
 from .stopwords import SPANISH_MEDICAL_STOPWORDS
 
 
@@ -31,7 +40,8 @@ class TextProcessorConfig:
     """Configuration for text preprocessing.
 
     Attributes:
-        language: Language for stemming and stopwords (default: "spanish").
+        language: Language for lemmatization and stopwords (default: "spanish").
+        spacy_model: spaCy model name to use (default: "es_core_news_md").
         min_token_length: Minimum token length to keep (default: 2).
         max_token_length: Maximum token length to keep (default: 50).
         remove_accents: Whether to normalize accented characters (default: False).
@@ -41,6 +51,7 @@ class TextProcessorConfig:
     """
 
     language: str = "spanish"
+    spacy_model: str = "es_core_news_md"
     min_token_length: int = 2
     max_token_length: int = 20
     remove_accents: bool = False
@@ -52,16 +63,16 @@ class TextProcessor:
     """Preprocesses Spanish medical text for LSI indexing.
 
     Pipeline stages:
-        1. Normalization (lowercase, unicode normalization)
-        2. Tokenization (NLTK word_tokenize for Spanish)
+        1. Normalization (lowercase, unicode normalization, cleaning)
+        2. Tokenization (spaCy tokenizer for Spanish)
         3. Stopword removal (NLTK Spanish + medical domain)
-        4. Stemming (SnowballStemmer for Spanish)
+        4. Lemmatization (spaCy lemmatizer with POS tagging)
         5. Token filtering (length constraints)
 
     Example:
         processor = TextProcessor()
         result = processor.process("La hipertensión arterial causa dolores de cabeza")
-        # Result: "hipertens arter caus dolor cabez"
+        # Result: "hipertensión arterial causar dolor cabeza"
 
         # With custom config
         config = TextProcessorConfig(min_token_length=3)
@@ -74,40 +85,56 @@ class TextProcessor:
         Args:
             config: Processing configuration. Uses defaults if None.
 
+        Raises:
+            OSError: If the spaCy model is not installed.
+                Install with: python -m spacy download es_core_news_md
+
         Note:
-            Downloads required NLTK data on first use if not present.
+            The spaCy model is loaded once on initialization and reused for all texts.
         """
         self.config = config or TextProcessorConfig()
-        self._ensure_nltk_data()
 
-        self._stemmer = SnowballStemmer(self.config.language)
+        # Load spaCy model
+        try:
+            self._nlp: Language = spacy.load(self.config.spacy_model)
+            # Disable unnecessary pipeline components for performance
+            # We only need tokenizer, tagger, and lemmatizer
+            self._nlp.disable_pipes(["parser", "ner"])
+        except OSError as e:
+            logger.error(
+                f"spaCy model '{self.config.spacy_model}' not found. "
+                f"Install with: python -m spacy download {self.config.spacy_model}"
+            )
+            raise OSError(
+                f"spaCy model '{self.config.spacy_model}' not installed. "
+                f"Run: python -m spacy download {self.config.spacy_model}"
+            ) from e
+
         self._stopwords = self._load_stopwords()
+        self.spell_checker: TrieSpellChecker = TrieSpellChecker()
 
         logger.debug(
             f"TextProcessor initialized: language={self.config.language}, "
-            f"stopwords={len(self._stopwords)}"
+            f"model={self.config.spacy_model}, stopwords={len(self._stopwords)}"
         )
 
-    def _ensure_nltk_data(self) -> None:
-        """Download NLTK data packages if not present."""
-        required_packages = [
-            ("tokenizers/punkt", "punkt"),
-            ("tokenizers/punkt_tab", "punkt_tab"),
-            ("corpora/stopwords", "stopwords"),
-        ]
-
-        for path, package in required_packages:
-            try:
-                nltk.data.find(path)
-            except LookupError:
-                logger.info(f"Downloading NLTK package: {package}")
-                nltk.download(package, quiet=True)
-
     def _load_stopwords(self) -> set[str]:
-        """Load Spanish stopwords plus custom domain stopwords."""
-        from nltk.corpus import stopwords as nltk_stopwords
+        """Load Spanish stopwords plus custom domain stopwords.
 
-        base_stopwords = set(nltk_stopwords.words(self.config.language))
+        Downloads NLTK stopwords on first use if not present.
+        """
+        try:
+            try:
+                nltk.data.find("corpora/stopwords")
+            except LookupError:
+                logger.info("Downloading NLTK stopwords package")
+                nltk.download("stopwords", quiet=True)
+
+            base_stopwords = set(nltk_stopwords.words(self.config.language))
+        except Exception as e:
+            logger.warning(f"Could not load NLTK stopwords: {e}. Using only custom stopwords.")
+            base_stopwords = set()
+
         combined = base_stopwords | SPANISH_MEDICAL_STOPWORDS | self.config.custom_stopwords
 
         logger.debug(
@@ -118,40 +145,85 @@ class TextProcessor:
 
         return combined
 
-    def process(self, text: str) -> str:
+    def process(self, text: str, is_query: bool = False) -> str:
         """Apply the full preprocessing pipeline to a text.
+
+        Pipeline flow:
+            1. Normalize (lowercase, unicode, cleaning)
+            2. Tokenize (split into tokens)
+            3. Remove stopwords
+            4. Lemmatize (reduce to base form)
+            5. Filter tokens (length constraints)
+            6. If is_query=False: add tokens to spell checker vocabulary
+               If is_query=True: correct tokens using known vocabulary
 
         Args:
             text: Raw input text.
+            is_query: If False, tokens are added to spell checker vocabulary.
+                      If True, tokens are corrected using the vocabulary.
 
         Returns:
-            Space-joined preprocessed tokens ready for TF-IDF.
+            Space-joined preprocessed tokens ready for indexer.
         """
         if not text or not text.strip():
             return ""
 
-        tokens = self.tokenize(text)
+        normalized = self.normalize(text)
+        tokens = self.tokenize(normalized)
         tokens = self.remove_stopwords(tokens)
-        tokens = self.stem(tokens)
+        tokens = self.lemmatize(tokens)
         tokens = self.filter_tokens(tokens)
+
+        if is_query:
+            # Correct tokens using known vocabulary
+            tokens = self._correct_spelling(tokens)
+        else:
+            # Add tokens to vocabulary for future corrections
+            self._add_to_vocabulary(tokens)
 
         return " ".join(tokens)
 
-    def tokenize(self, text: str) -> list[str]:
-        """Normalize and tokenize text.
+    def _add_to_vocabulary(self, tokens: list[str]) -> None:
+        """Add tokens to the spell checker vocabulary.
+
+        Args:
+            tokens: List of processed tokens to add.
+        """
+        for token in tokens:
+            self.spell_checker._insert(token)
+
+    def _correct_spelling(self, tokens: list[str]) -> list[str]:
+        """Apply spell correction to tokens using known vocabulary.
+
+        Args:
+            tokens: List of tokens to correct.
+
+        Returns:
+            List of tokens with spelling corrections applied.
+        """
+        corrected = []
+        for token in tokens:
+            correction = self.spell_checker.correct(token)
+            # Use correction if found, otherwise keep the original token
+            corrected.append(correction if correction else token)
+
+        return corrected
+
+    def normalize(self, text: str) -> str:
+        """Normalize text by applying lowercase, unicode normalization, and cleaning.
 
         Applies:
             - Lowercase conversion (if enabled)
             - Unicode normalization (NFC)
             - Accent removal (if enabled)
             - Non-alphanumeric removal (preserves Spanish characters)
-            - NLTK word tokenization
+            - Multiple spaces collapse
 
         Args:
             text: Raw text input.
 
         Returns:
-            List of normalized tokens.
+            Normalized text ready for tokenization.
         """
         # Lowercase
         if self.config.lowercase:
@@ -171,15 +243,19 @@ class TextProcessor:
         # Collapse multiple spaces
         text = re.sub(r"\s+", " ", text).strip()
 
-        # NLTK tokenization for Spanish
-        try:
-            tokens = word_tokenize(text, language=self.config.language)
-        except LookupError:
-            # Fallback to simple split if NLTK data not available
-            logger.warning("NLTK tokenizer not available, using simple split")
-            tokens = text.split()
+        return text
 
-        return tokens
+    def tokenize(self, text: str) -> list[str]:
+        """Tokenize normalized text using spaCy.
+
+        Args:
+            text: Normalized text input.
+
+        Returns:
+            List of tokens.
+        """
+        doc = self._nlp(text)
+        return [token.text for token in doc]
 
     def remove_stopwords(self, tokens: list[str]) -> list[str]:
         """Remove stopwords from token list.
@@ -192,21 +268,29 @@ class TextProcessor:
         """
         return [t for t in tokens if t not in self._stopwords]
 
-    def stem(self, tokens: list[str]) -> list[str]:
-        """Apply stemming to tokens.
+    def lemmatize(self, tokens: list[str]) -> list[str]:
+        """Apply lemmatization to tokens using spaCy.
 
-        Uses NLTK SnowballStemmer for Spanish which handles:
-            - medicamentos → medic
-            - hipertensión → hipertens
-            - arterial → arter
+        Uses spaCy's lemmatizer with POS tagging for accurate lemmatization:
+            - medicamentos → medicamento
+            - hipertensión → hipertensión (preserved)
+            - arterial → arterial (preserved as adjective)
+            - causa → causar (verb infinitive)
 
         Args:
             tokens: List of tokens.
 
         Returns:
-            List of stemmed tokens.
+            List of lemmatized tokens.
+
+        Note:
+            Unlike stemming, lemmatization preserves valid word forms and is
+            more suitable for medical terminology where precision matters.
         """
-        return [self._stemmer.stem(t) for t in tokens]
+        # Process tokens as a single document for POS tagging context
+        text = " ".join(tokens)
+        doc = self._nlp(text)
+        return [token.lemma_ for token in doc]
 
     def filter_tokens(self, tokens: list[str]) -> list[str]:
         """Filter tokens by length constraints.

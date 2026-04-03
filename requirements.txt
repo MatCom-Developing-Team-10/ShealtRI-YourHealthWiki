@@ -9,6 +9,9 @@ scipy>=1.13.0
 scikit-learn>=1.5.0          # TF-IDF, TruncatedSVD for LSI model
 sentence-transformers>=3.0.0  # Embeddings for RAG and semantic search
 nltk>=3.8.0                  # Natural language processing utilities
+spacy>=3.7.0                 # Industrial-strength NLP with POS tagging and lemmatization
+# Note: After installing spacy, download the Spanish model with:
+#   python -m spacy download es_core_news_md
 
 # Persistence & Serialization
 joblib>=1.4.0                # Model persistence
@@ -25,6 +28,10 @@ python-dotenv>=1.0.0         # Environment configuration
 requests>=2.31.0             # HTTP library for web requests
 beautifulsoup4>=4.12.0       # HTML/XML parsing for crawler
 
+# Document Loading (optional formats)
+unstructured>=0.10.0         # HTML parsing for DocumentLoader
+pypdf>=3.17.0                # PDF parsing for DocumentLoader
+
 # User Interface (optional, for Corte 3)
 streamlit>=1.28.0            # Streamlit for UI or
 # gradio>=3.50.0             # Alternative: Gradio for UI
@@ -32,6 +39,9 @@ streamlit>=1.28.0            # Streamlit for UI or
 # Testing & Development
 pytest>=8.2.0                # Unit testing framework
 pytest-cov>=4.1.0            # Coverage reporting for tests
+pytest-xdist>=3.5.0          # Parallel test execution
+pytest-mock>=3.12.0          # Mock and patch utilities for testing
+mock>=5.1.0                  # Mock library for creating test doubles
 
 # Utilities
 python-dateutil>=2.8.0       # Date utilities

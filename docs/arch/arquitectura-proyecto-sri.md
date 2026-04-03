@@ -52,9 +52,10 @@ sri-project/
 │   ├── document_loader/           # Carga de documentos
 │   │   ├── __init__.py
 │   │   └── service.py             ← DocumentLoader (JSON, directorio)
-│   ├── text_processor/            # Preprocesamiento de texto
+│   ├── text_processor/            # Preprocesamiento de texto + Spell Checker
 │   │   ├── __init__.py
-│   │   ├── service.py             ← TextProcessor (NLTK español)
+│   │   ├── service.py             ← TextProcessor (spaCy + NLTK español)
+│   │   ├── spell_checker.py       ← TrieSpellChecker (Levenshtein)
 │   │   └── stopwords.py           ← Stopwords español + dominio
 │   ├── indexer/                   # Construcción de corpus
 │   │   ├── __init__.py
@@ -63,9 +64,8 @@ sri-project/
 │   ├── retriever/                 # Modelo LSI
 │   │   ├── __init__.py
 │   │   ├── service.py             ← LSIRetriever (orquestador)
-│   │   ├── tfidf_processor.py     ← TfidfVectorizer wrapper
-│   │   ├── lsi_model.py           ← TruncatedSVD wrapper
-│   │   └── spell_checker.py       ← Trie para corrección ortográfica
+│   │   ├── tfidf_processor.py     ← TF-IDF wrapper
+│   │   └── lsi_model.py           ← TruncatedSVD wrapper
 │   ├── crawler/
 │   │   ├── __init__.py
 │   │   ├── service.py
@@ -155,30 +155,31 @@ Recibe la consulta, la pasa por cada etapa en orden, y en cada punto de enganche
 El pipeline de indexación prepara los documentos para el modelo LSI:
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│ DocumentLoader  │ →  │ TextProcessor   │ →  │ IndexerService  │
-│                 │    │                 │    │                 │
-│ load_from_dir() │    │ tokenize()      │    │ build()         │
-│ load_from_json()│    │ remove_stops()  │    │                 │
-│                 │    │ stem()          │    │ → IndexedCorpus │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+┌─────────────────┐    ┌─────────────────────┐    ┌─────────────────┐
+│ DocumentLoader  │ →  │ TextProcessor       │ →  │ IndexerService  │
+│                 │    │ is_query=False      │    │                 │
+│ load_from_dir() │    │ (tokens added       │    │ build()         │
+│ load_from_json()│    │  to Trie vocab)     │    │                 │
+│                 │    │                     │    │ → IndexedCorpus │
+└─────────────────┘    └─────────────────────┘    └─────────────────┘
         ↓                      ↓                      ↓
-   list[Document]      processed text         IndexedCorpus
-                       (tokens stemmed)       ├── documents
-                                              └── processed_texts
+   list[Document]      Tokens lematizados     IndexedCorpus
+                       (añadidos al Trie)     ├── documents
+                                              ├── inverted_index
+                                              └── vocabulary
 ```
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│ TfidfProcessor  │ →  │   LSIModel      │ →  │ ChromaRepository│
-│                 │    │                 │    │                 │
-│ fit(corpus)     │    │ fit(tfidf_mat)  │    │ add_documents() │
-│                 │    │                 │    │                 │
-│ → sparse matrix │    │ → doc vectors   │    │ → stored in DB  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+┌─────────────────┐    ┌─────────────────┐    ┌──────────────────┐
+│ TfidfProcessor  │ →  │   LSIModel      │ →  │ ChromaRepository │
+│                 │    │                 │    │                  │
+│ fit(corpus)     │    │ fit(tfidf_mat)  │    │ add_documents()  │
+│                 │    │                 │    │                  │
+│ → sparse matrix │    │ → doc vectors   │    │ → stored in DB   │
+└─────────────────┘    └─────────────────┘    └──────────────────┘
 ```
 
-### Ejemplo de uso
+### Ejemplo de uso (Indexación)
 
 ```python
 from modules.document_loader import DocumentLoader
@@ -189,13 +190,56 @@ from modules.indexer import IndexerService
 loader = DocumentLoader()
 documents = loader.load_from_directory("data/raw/")
 
-# 2. Preprocesar y construir corpus
-processor = TextProcessor()  # NLTK español: tokenize, stopwords, stem
+# 2. Preprocesar y construir corpus (spell checker aprende vocabulario)
+processor = TextProcessor()  # spaCy: tokenize, stopwords, lemmatize
 indexer = IndexerService(text_processor=processor)
-corpus = indexer.build(documents)
+corpus = indexer.build(documents)  # Trie aprende tokens lematizados
 
 # 3. Entrenar retriever
 retriever.fit(corpus)
+```
+
+## Flujo de una consulta
+
+El pipeline de búsqueda procesa consultas con corrección ortográfica automática:
+
+```
+┌──────────────┐    ┌──────────────────────┐    ┌────────────────┐
+│ User Query   │ →  │ TextProcessor        │ →  │ Indexer.build_ │
+│ "hipertensoin"   │ is_query=True        │    │ query()        │
+│              │    │ (tokens corrected    │    │                │
+│              │    │  using Trie vocab)   │    │ → Query        │
+│              │    │ → "hipertensión"     │    │   IndexedCorpus│
+└──────────────┘    └──────────────────────┘    └────────────────┘
+                                                        ↓
+                    ┌────────────────────────────────────────────┐
+                    │                                            │
+          ┌─────────────────┐    ┌──────────────┐    ┌──────────────┐
+          │ TfidfProcessor  │ →  │ LSIModel     │ →  │ ChromaDB     │
+          │                 │    │              │    │              │
+          │ transform()     │    │ project_     │    │ search_      │
+          │ (filter vocab)  │    │ query()      │    │ similar()    │
+          │ → query vector  │    │ → latent vec │    │ → top-k docs │
+          └─────────────────┘    └──────────────┘    └──────────────┘
+```
+
+### Ejemplo de uso (Búsqueda)
+
+```python
+from core.models import Query
+from modules.retriever import LSIRetriever
+
+# Query con error ortográfico
+query_text = "hipertensoin arterail"
+query_corpus = indexer.build_query(query_text)  # Construye IndexedCorpus
+
+# LSI corrige automáticamente y busca
+query = Query(text=query_text, indexed_corpus=query_corpus)
+results = retriever.retrieve(query)
+
+# Devuelve: "hipertensión arterial" (corregida y recuperada)
+for doc in results:
+    print(f"{doc.document.text} (score: {doc.score:.3f})")
 ```
 
 ---
