@@ -4,31 +4,22 @@ This is the main entry-point for retrieval. It implements a two-tier storage arc
     - Vector DB (ChromaDB): Stores doc IDs + embeddings for fast similarity search
     - Document Store: Stores full document text and metadata
 
-Retrieval flow:
-<<<<<<< HEAD
-    IndexedCorpus (docs) → TfidfProcessor.fit() → LSIModel.fit() → store vectors
-    IndexedCorpus (query) → TfidfProcessor.transform() → LSIModel.project() → search
-=======
-    IndexedCorpus → TfidfProcessor → LSIModel → ChromaRepository (vectors)
-                                                → DocumentStore (full text)
->>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
+Retrieval pipeline:
+    Query (raw text) → TextProcessor.process(is_query=True)
+                    → TfidfProcessor.transform()
+                    → LSIModel.project_query()
+                    → ChromaRepository.search_similar()
+                    → DocumentStore.get_by_ids()
+                    → RetrievedDocument list (ranked)
 """
 
 from __future__ import annotations
 
-<<<<<<< HEAD
-=======
-import re
-
->>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
 from core.interfaces import BaseRetriever, BaseRepository, DocumentStore, IndexedCorpus
 from core.models import Query, RetrievedDocument
+from modules.text_processor import TextProcessor
 
 from .lsi_model import LSIModel
-<<<<<<< HEAD
-=======
-from .spell_checker import TrieSpellChecker
->>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
 from .tfidf_processor import TfidfProcessor
 
 
@@ -36,22 +27,17 @@ class LSIRetriever(BaseRetriever):
     """Retriever based on TF-IDF + TruncatedSVD (LSI) with two-tier storage.
 
     Orchestrates:
-        1. TfidfProcessor    — builds/queries the TF-IDF matrix.
-        2. LSIModel          — reduces dimensionality via SVD.
-        3. BaseRepository    — stores/searches document vectors (ChromaDB).
-        4. DocumentStore     — stores full document text and metadata.
-<<<<<<< HEAD
-=======
-        5. TrieSpellChecker  — corrects query typos before vectorization.
->>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
+        1. TextProcessor     — normalizes and preprocesses query text.
+        2. TfidfProcessor    — builds/queries the TF-IDF matrix.
+        3. LSIModel          — reduces dimensionality via SVD.
+        4. BaseRepository    — stores/searches document vectors (ChromaDB).
+        5. DocumentStore     — stores full document text and metadata.
 
     Storage architecture:
         - Vector DB: ID + embedding + URL (for fast similarity search)
         - Document Store: ID + full text + metadata (for retrieval)
     """
 
-<<<<<<< HEAD
-<<<<<<< HEAD
     # Default similarity threshold - results below this score are filtered out
     DEFAULT_SIMILARITY_THRESHOLD = 0.4
 
@@ -59,91 +45,9 @@ class LSIRetriever(BaseRetriever):
         self,
         repository: BaseRepository,
         document_store: DocumentStore,
+        text_processor: TextProcessor | None = None,
         model_dir: str = "models/lsi",
         n_components: int = 100,
-        similarity_threshold: float | None = None,
-    ) -> None:
-        """Initialize with repository, document store, and hyper-parameters.
-
-        Args:
-            repository: Vector storage backend (e.g. ChromaRepository).
-            document_store: Full text storage backend (e.g. FileSystemDocumentStore).
-            model_dir: Directory for persisting model artifacts.
-            n_components: Number of latent LSI dimensions.
-            similarity_threshold: Minimum similarity score (0-1) for results.
-                Results below this threshold are filtered out. If None, uses
-                DEFAULT_SIMILARITY_THRESHOLD (0.4).
-        """
-        self.repository = repository
-        self.document_store = document_store
-        self.model_dir = model_dir
-        self.n_components = n_components
-        self.similarity_threshold = (
-            similarity_threshold
-            if similarity_threshold is not None
-            else self.DEFAULT_SIMILARITY_THRESHOLD
-        )
-
-        # Sub-components — initialized during fit or load
-        self.tfidf: TfidfProcessor | None = None
-        self.model: LSIModel | None = None
-
-    # ------------------------------------------------------------------
-    # Training
-    # ------------------------------------------------------------------
-
-    def fit(self, corpus: IndexedCorpus) -> None:
-        """Fit the full retrieval pipeline from an indexed corpus.
-
-        Steps:
-            1. Build TF-IDF matrix from the IndexedCorpus (uses inverted_index).
-            2. Fit LSI (SVD) on the TF-IDF matrix → document vectors.
-            3. Store documents in document store (full text + metadata).
-            4. Store IDs + vectors + URLs in vector repository.
-
-        Args:
-            corpus: Preprocessed corpus from the indexer, containing
-                documents, processed texts, inverted index, and vocabulary.
-        """
-        # 1. TF-IDF - build matrix from inverted index
-        self.tfidf = TfidfProcessor()
-        tfidf_matrix = self.tfidf.fit(corpus)
-
-        # 2. LSI
-        self.model = LSIModel(n_components=self.n_components)
-        embeddings = self.model.fit(tfidf_matrix)
-
-        # 3. Store full documents in document store
-        self.document_store.add_documents(corpus.documents)
-
-        # 4. Store vectors in vector repository (IDs + embeddings + URLs)
-        self.repository.add_documents(corpus.documents, embeddings=embeddings)
-
-    # ------------------------------------------------------------------
-    # Query
-    # ------------------------------------------------------------------
-
-    def retrieve(
-        self,
-        query: Query,
-        top_k: int = 10,
-        threshold: float | None = None,
-    ) -> list[RetrievedDocument]:
-        """Retrieve the top-k most relevant documents for a query.
-
-=======
-=======
-    # Default similarity threshold - results below this score are filtered out
-    DEFAULT_SIMILARITY_THRESHOLD = 0.4
-
->>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
-    def __init__(
-        self,
-        repository: BaseRepository,
-        document_store: DocumentStore,
-        model_dir: str = "models/lsi",
-        n_components: int = 100,
-        max_spell_distance: int = 2,
         tfidf_max_features: int | None = 10_000,
         tfidf_min_df: int = 1,
         tfidf_max_df: float = 0.95,
@@ -154,22 +58,23 @@ class LSIRetriever(BaseRetriever):
         Args:
             repository: Vector storage backend (e.g. ChromaRepository).
             document_store: Full text storage backend (e.g. FileSystemDocumentStore).
+            text_processor: TextProcessor for query preprocessing. If None, must be
+                set via set_text_processor() before calling retrieve().
             model_dir: Directory for persisting model artifacts.
             n_components: Number of latent LSI dimensions.
-            max_spell_distance: Max edit distance for spelling correction.
             tfidf_max_features: Cap on TF-IDF vocabulary size (ignored when
                 the corpus supplies its own vocabulary).
             tfidf_min_df: Minimum document frequency for TF-IDF terms.
             tfidf_max_df: Maximum document frequency for TF-IDF terms.
             similarity_threshold: Minimum similarity score (0-1) for results.
                 Results below this threshold are filtered out. If None, uses
-                DEFAULT_SIMILARITY_THRESHOLD (0.1).
+                DEFAULT_SIMILARITY_THRESHOLD (0.4).
         """
         self.repository = repository
         self.document_store = document_store
+        self.text_processor = text_processor
         self.model_dir = model_dir
         self.n_components = n_components
-        self.max_spell_distance = max_spell_distance
         self.similarity_threshold = (
             similarity_threshold
             if similarity_threshold is not None
@@ -179,12 +84,19 @@ class LSIRetriever(BaseRetriever):
         # Sub-components — initialized during fit or load
         self.tfidf: TfidfProcessor | None = None
         self.model: LSIModel | None = None
-        self.spell_checker: TrieSpellChecker | None = None
 
         # Store TF-IDF hyperparameters for deferred construction
         self._tfidf_max_features = tfidf_max_features
         self._tfidf_min_df = tfidf_min_df
         self._tfidf_max_df = tfidf_max_df
+
+    def set_text_processor(self, text_processor: TextProcessor) -> None:
+        """Set or override the TextProcessor for query preprocessing.
+
+        Args:
+            text_processor: TextProcessor instance for query preprocessing.
+        """
+        self.text_processor = text_processor
 
     # ------------------------------------------------------------------
     # Training
@@ -194,17 +106,16 @@ class LSIRetriever(BaseRetriever):
         """Fit the full retrieval pipeline from an indexed corpus.
 
         Steps:
-            1. Build TF-IDF matrix from the ``IndexedCorpus``.
+            1. Build TF-IDF matrix from the IndexedCorpus.
             2. Fit LSI (SVD) on the TF-IDF matrix → document vectors.
             3. Store documents in document store (full text + metadata).
             4. Store IDs + vectors + URLs in vector repository.
-            5. Initialize the spell-checker with the TF-IDF vocabulary.
 
         Args:
             corpus: Preprocessed corpus from the indexer, containing
-                documents and their processed texts.
+                documents, processed texts, inverted index, and vocabulary.
         """
-        # 1. TF-IDF
+        # 1. TF-IDF - build matrix from indexed corpus
         self.tfidf = TfidfProcessor(
             max_features=self._tfidf_max_features,
             min_df=self._tfidf_min_df,
@@ -222,13 +133,6 @@ class LSIRetriever(BaseRetriever):
         # 4. Store vectors in vector repository (IDs + embeddings + URLs)
         self.repository.add_documents(corpus.documents, embeddings=embeddings)
 
-        # 5. Spell checker from TF-IDF vocabulary
-        vocab = self.tfidf.vocabulary
-        self.spell_checker = TrieSpellChecker(
-            vocabulary=vocab,
-            max_distance=self.max_spell_distance,
-        )
-
     # ------------------------------------------------------------------
     # Query
     # ------------------------------------------------------------------
@@ -241,22 +145,16 @@ class LSIRetriever(BaseRetriever):
     ) -> list[RetrievedDocument]:
         """Retrieve the top-k most relevant documents for a query.
 
->>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
-        Two-phase retrieval:
-            1. Vector similarity search → returns doc IDs and scores
-            2. Fetch full documents from document store by IDs
-
-<<<<<<< HEAD
-<<<<<<< HEAD
-        Results are filtered by similarity threshold and returned in ranked order
-        (highest score first).
-
-        The query must contain an IndexedCorpus (built by the pipeline).
-        The TF-IDF processor filters terms not in its vocabulary, then
-        projects through LSI for vector search.
+        Pipeline:
+            1. Preprocess query using TextProcessor (normalize, tokenize, lemmatize)
+            2. Transform to TF-IDF vector
+            3. Project to LSI latent space
+            4. Search ChromaDB for similar documents
+            5. Fetch full documents from DocumentStore
+            6. Filter by similarity threshold and return ranked results
 
         Args:
-            query: User query with indexed_corpus populated.
+            query: User query with text string.
             top_k: Maximum number of results to return.
             threshold: Minimum similarity score (0-1) for results. If None,
                 uses the instance's similarity_threshold. Results below this
@@ -268,59 +166,26 @@ class LSIRetriever(BaseRetriever):
 
         Raises:
             RuntimeError: If the retriever has not been fitted or loaded.
-            ValueError: If query.indexed_corpus is None.
-=======
-=======
-        Results are filtered by similarity threshold and returned in ranked order
-        (highest score first).
-
->>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
-        The query text is cleaned, spell-corrected, projected through
-        TF-IDF → LSI, and used to search the vector repository.
-
-        Args:
-            query: User query.
-            top_k: Maximum number of results to return.
-            threshold: Minimum similarity score (0-1) for results. If None,
-                uses the instance's similarity_threshold. Results below this
-                threshold are filtered out.
-
-        Returns:
-            Ranked list of retrieved documents with full text, filtered by
-            similarity threshold and sorted by score (descending).
-
-        Raises:
-            RuntimeError: If the retriever has not been fitted or loaded.
->>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
+            RuntimeError: If TextProcessor is not set and needed.
         """
         if self.tfidf is None or self.model is None:
             raise RuntimeError(
                 "Retriever must be fitted or loaded before use."
             )
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-        if query.indexed_corpus is None:
-            raise ValueError(
-                "Query must have indexed_corpus populated. "
-                "Build it with the indexer before calling retrieve()."
-            )
-
         # Use provided threshold or fall back to instance default
         min_score = threshold if threshold is not None else self.similarity_threshold
 
-        # Phase 1: Vector similarity search
-        query_tfidf = self.tfidf.transform(query.indexed_corpus)
-=======
-=======
-        # Use provided threshold or fall back to instance default
-        min_score = threshold if threshold is not None else self.similarity_threshold
+        # Phase 1: Preprocess query text
+        if self.text_processor is not None:
+            # Full preprocessing: normalize, tokenize, lemmatize, spell check
+            processed_query = self.text_processor.process(query.text, is_query=True)
+        else:
+            # Fallback: minimal preprocessing (assumes query is already somewhat clean)
+            processed_query = query.text.lower().strip()
 
->>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
-        # Phase 1: Vector similarity search
-        clean_text = self._normalize_query(query.text)
-        query_tfidf = self.tfidf.transform(clean_text)
->>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
+        # Phase 2: Vector similarity search
+        query_tfidf = self.tfidf.transform(processed_query)
         query_vector = self.model.project_query(query_tfidf)
 
         # Get ranked (doc_id, score) pairs from vector DB
@@ -329,10 +194,6 @@ class LSIRetriever(BaseRetriever):
         if not results:
             return []
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
         # Filter by similarity threshold
         filtered_results = [
             (doc_id, score) for doc_id, score in results if score >= min_score
@@ -341,8 +202,7 @@ class LSIRetriever(BaseRetriever):
         if not filtered_results:
             return []
 
-<<<<<<< HEAD
-        # Phase 2: Fetch full documents from document store
+        # Phase 3: Fetch full documents from document store
         doc_ids = [doc_id for doc_id, _ in filtered_results]
         score_map = {doc_id: score for doc_id, score in filtered_results}
 
@@ -359,36 +219,6 @@ class LSIRetriever(BaseRetriever):
                         score=score_map[doc_id],
                     )
                 )
-=======
-=======
->>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
-        # Phase 2: Fetch full documents from document store
-        doc_ids = [doc_id for doc_id, _ in filtered_results]
-        score_map = {doc_id: score for doc_id, score in filtered_results}
-
-        documents = self.document_store.get_by_ids(doc_ids)
-        doc_map = {doc.doc_id: doc for doc in documents}
-
-<<<<<<< HEAD
-        # Combine documents with their scores
-        retrieved = [
-            RetrievedDocument(document=doc, score=score_map[doc.doc_id])
-            for doc in documents
-            if doc.doc_id in score_map
-        ]
->>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
-=======
-        # Build result list preserving original ranking order from vector search
-        retrieved = []
-        for doc_id in doc_ids:
-            if doc_id in doc_map:
-                retrieved.append(
-                    RetrievedDocument(
-                        document=doc_map[doc_id],
-                        score=score_map[doc_id],
-                    )
-                )
->>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
 
         return retrieved
 
@@ -413,79 +243,32 @@ class LSIRetriever(BaseRetriever):
         cls,
         repository: BaseRepository,
         document_store: DocumentStore,
+        text_processor: TextProcessor | None = None,
         model_dir: str = "models/lsi",
-<<<<<<< HEAD
         similarity_threshold: float | None = None,
     ) -> "LSIRetriever":
         """Restore a fitted retriever from persisted artifacts.
 
         Loads TF-IDF vectorizer and SVD model from disk.
-=======
-        max_spell_distance: int = 2,
-        similarity_threshold: float | None = None,
-    ) -> "LSIRetriever":
-        """Restore a fitted retriever from persisted artifacts.
-
-        Loads TF-IDF vectorizer and SVD model from disk, and rebuilds
-        the spell checker from the TF-IDF vocabulary.
->>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
 
         Args:
             repository: Vector storage backend.
             document_store: Full text storage backend.
+            text_processor: TextProcessor for query preprocessing.
             model_dir: Directory containing saved artifacts.
-<<<<<<< HEAD
             similarity_threshold: Minimum similarity score for results.
                 If None, uses DEFAULT_SIMILARITY_THRESHOLD.
-=======
-            max_spell_distance: Max edit distance for spelling correction.
-<<<<<<< HEAD
->>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
-=======
-            similarity_threshold: Minimum similarity score for results.
-                If None, uses DEFAULT_SIMILARITY_THRESHOLD.
->>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
 
         Returns:
-            Ready-to-use ``LSIRetriever`` instance.
+            Ready-to-use LSIRetriever instance.
         """
         instance = cls(
             repository=repository,
             document_store=document_store,
+            text_processor=text_processor,
             model_dir=model_dir,
-<<<<<<< HEAD
             similarity_threshold=similarity_threshold,
         )
         instance.tfidf = TfidfProcessor.load(model_dir)
         instance.model = LSIModel.load(model_dir)
         return instance
-
-=======
-            max_spell_distance=max_spell_distance,
-            similarity_threshold=similarity_threshold,
-        )
-        instance.tfidf = TfidfProcessor.load(model_dir)
-        instance.model = LSIModel.load(model_dir)
-
-        # Rebuild spell checker from the loaded TF-IDF vocabulary
-        vocab = instance.tfidf.vocabulary
-        instance.spell_checker = TrieSpellChecker(
-            vocabulary=vocab,
-            max_distance=max_spell_distance,
-        )
-        return instance
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _normalize_query(self, text: str) -> str:
-        """Apply basic cleaning and spell correction to query text."""
-        text = text.lower().strip()
-        text = re.sub(r"[^\w\s]", "", text)
-        if self.spell_checker:
-            words = text.split()
-            corrected = [self.spell_checker.correct(w) or w for w in words]
-            return " ".join(corrected)
-        return text
->>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
