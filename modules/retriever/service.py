@@ -4,20 +4,15 @@ This is the main entry-point for retrieval. It implements a two-tier storage arc
     - Vector DB (ChromaDB): Stores doc IDs + embeddings for fast similarity search
     - Document Store: Stores full document text and metadata
 
-Retrieval pipeline:
-    Query (raw text) → TextProcessor.process(is_query=True)
-                    → TfidfProcessor.transform()
-                    → LSIModel.project_query()
-                    → ChromaRepository.search_similar()
-                    → DocumentStore.get_by_ids()
-                    → RetrievedDocument list (ranked)
+Retrieval flow:
+    IndexedCorpus (docs) → TfidfProcessor.fit() → LSIModel.fit() → store vectors
+    IndexedCorpus (query) → TfidfProcessor.transform() → LSIModel.project() → search
 """
 
 from __future__ import annotations
 
 from core.interfaces import BaseRetriever, BaseRepository, DocumentStore, IndexedCorpus
 from core.models import Query, RetrievedDocument
-from modules.text_processor import TextProcessor
 
 from .lsi_model import LSIModel
 from .tfidf_processor import TfidfProcessor
@@ -27,11 +22,10 @@ class LSIRetriever(BaseRetriever):
     """Retriever based on TF-IDF + TruncatedSVD (LSI) with two-tier storage.
 
     Orchestrates:
-        1. TextProcessor     — normalizes and preprocesses query text.
-        2. TfidfProcessor    — builds/queries the TF-IDF matrix.
-        3. LSIModel          — reduces dimensionality via SVD.
-        4. BaseRepository    — stores/searches document vectors (ChromaDB).
-        5. DocumentStore     — stores full document text and metadata.
+        1. TfidfProcessor    — builds/queries the TF-IDF matrix.
+        2. LSIModel          — reduces dimensionality via SVD.
+        3. BaseRepository    — stores/searches document vectors (ChromaDB).
+        4. DocumentStore     — stores full document text and metadata.
 
     Storage architecture:
         - Vector DB: ID + embedding + URL (for fast similarity search)
@@ -45,12 +39,8 @@ class LSIRetriever(BaseRetriever):
         self,
         repository: BaseRepository,
         document_store: DocumentStore,
-        text_processor: TextProcessor | None = None,
         model_dir: str = "models/lsi",
         n_components: int = 100,
-        tfidf_max_features: int | None = 10_000,
-        tfidf_min_df: int = 1,
-        tfidf_max_df: float = 0.95,
         similarity_threshold: float | None = None,
     ) -> None:
         """Initialize with repository, document store, and hyper-parameters.
@@ -58,21 +48,14 @@ class LSIRetriever(BaseRetriever):
         Args:
             repository: Vector storage backend (e.g. ChromaRepository).
             document_store: Full text storage backend (e.g. FileSystemDocumentStore).
-            text_processor: TextProcessor for query preprocessing. If None, must be
-                set via set_text_processor() before calling retrieve().
             model_dir: Directory for persisting model artifacts.
             n_components: Number of latent LSI dimensions.
-            tfidf_max_features: Cap on TF-IDF vocabulary size (ignored when
-                the corpus supplies its own vocabulary).
-            tfidf_min_df: Minimum document frequency for TF-IDF terms.
-            tfidf_max_df: Maximum document frequency for TF-IDF terms.
             similarity_threshold: Minimum similarity score (0-1) for results.
                 Results below this threshold are filtered out. If None, uses
                 DEFAULT_SIMILARITY_THRESHOLD (0.4).
         """
         self.repository = repository
         self.document_store = document_store
-        self.text_processor = text_processor
         self.model_dir = model_dir
         self.n_components = n_components
         self.similarity_threshold = (
@@ -85,19 +68,6 @@ class LSIRetriever(BaseRetriever):
         self.tfidf: TfidfProcessor | None = None
         self.model: LSIModel | None = None
 
-        # Store TF-IDF hyperparameters for deferred construction
-        self._tfidf_max_features = tfidf_max_features
-        self._tfidf_min_df = tfidf_min_df
-        self._tfidf_max_df = tfidf_max_df
-
-    def set_text_processor(self, text_processor: TextProcessor) -> None:
-        """Set or override the TextProcessor for query preprocessing.
-
-        Args:
-            text_processor: TextProcessor instance for query preprocessing.
-        """
-        self.text_processor = text_processor
-
     # ------------------------------------------------------------------
     # Training
     # ------------------------------------------------------------------
@@ -106,7 +76,7 @@ class LSIRetriever(BaseRetriever):
         """Fit the full retrieval pipeline from an indexed corpus.
 
         Steps:
-            1. Build TF-IDF matrix from the IndexedCorpus.
+            1. Build TF-IDF matrix from the IndexedCorpus (uses inverted_index).
             2. Fit LSI (SVD) on the TF-IDF matrix → document vectors.
             3. Store documents in document store (full text + metadata).
             4. Store IDs + vectors + URLs in vector repository.
@@ -115,12 +85,8 @@ class LSIRetriever(BaseRetriever):
             corpus: Preprocessed corpus from the indexer, containing
                 documents, processed texts, inverted index, and vocabulary.
         """
-        # 1. TF-IDF - build matrix from indexed corpus
-        self.tfidf = TfidfProcessor(
-            max_features=self._tfidf_max_features,
-            min_df=self._tfidf_min_df,
-            max_df=self._tfidf_max_df,
-        )
+        # 1. TF-IDF - build matrix from inverted index
+        self.tfidf = TfidfProcessor()
         tfidf_matrix = self.tfidf.fit(corpus)
 
         # 2. LSI
@@ -145,16 +111,19 @@ class LSIRetriever(BaseRetriever):
     ) -> list[RetrievedDocument]:
         """Retrieve the top-k most relevant documents for a query.
 
-        Pipeline:
-            1. Preprocess query using TextProcessor (normalize, tokenize, lemmatize)
-            2. Transform to TF-IDF vector
-            3. Project to LSI latent space
-            4. Search ChromaDB for similar documents
-            5. Fetch full documents from DocumentStore
-            6. Filter by similarity threshold and return ranked results
+        Two-phase retrieval:
+            1. Vector similarity search → returns doc IDs and scores
+            2. Fetch full documents from document store by IDs
+
+        Results are filtered by similarity threshold and returned in ranked order
+        (highest score first).
+
+        The query must contain an IndexedCorpus (built by the pipeline).
+        The TF-IDF processor filters terms not in its vocabulary, then
+        projects through LSI for vector search.
 
         Args:
-            query: User query with text string.
+            query: User query with indexed_corpus populated.
             top_k: Maximum number of results to return.
             threshold: Minimum similarity score (0-1) for results. If None,
                 uses the instance's similarity_threshold. Results below this
@@ -166,26 +135,24 @@ class LSIRetriever(BaseRetriever):
 
         Raises:
             RuntimeError: If the retriever has not been fitted or loaded.
-            RuntimeError: If TextProcessor is not set and needed.
+            ValueError: If query.indexed_corpus is None.
         """
         if self.tfidf is None or self.model is None:
             raise RuntimeError(
                 "Retriever must be fitted or loaded before use."
             )
 
+        if query.indexed_corpus is None:
+            raise ValueError(
+                "Query must have indexed_corpus populated. "
+                "Build it with the indexer before calling retrieve()."
+            )
+
         # Use provided threshold or fall back to instance default
         min_score = threshold if threshold is not None else self.similarity_threshold
 
-        # Phase 1: Preprocess query text
-        if self.text_processor is not None:
-            # Full preprocessing: normalize, tokenize, lemmatize, spell check
-            processed_query = self.text_processor.process(query.text, is_query=True)
-        else:
-            # Fallback: minimal preprocessing (assumes query is already somewhat clean)
-            processed_query = query.text.lower().strip()
-
-        # Phase 2: Vector similarity search
-        query_tfidf = self.tfidf.transform(processed_query)
+        # Phase 1: Vector similarity search
+        query_tfidf = self.tfidf.transform(query.indexed_corpus)
         query_vector = self.model.project_query(query_tfidf)
 
         # Get ranked (doc_id, score) pairs from vector DB
@@ -202,7 +169,7 @@ class LSIRetriever(BaseRetriever):
         if not filtered_results:
             return []
 
-        # Phase 3: Fetch full documents from document store
+        # Phase 2: Fetch full documents from document store
         doc_ids = [doc_id for doc_id, _ in filtered_results]
         score_map = {doc_id: score for doc_id, score in filtered_results}
 
@@ -243,7 +210,6 @@ class LSIRetriever(BaseRetriever):
         cls,
         repository: BaseRepository,
         document_store: DocumentStore,
-        text_processor: TextProcessor | None = None,
         model_dir: str = "models/lsi",
         similarity_threshold: float | None = None,
     ) -> "LSIRetriever":
@@ -254,21 +220,20 @@ class LSIRetriever(BaseRetriever):
         Args:
             repository: Vector storage backend.
             document_store: Full text storage backend.
-            text_processor: TextProcessor for query preprocessing.
             model_dir: Directory containing saved artifacts.
             similarity_threshold: Minimum similarity score for results.
                 If None, uses DEFAULT_SIMILARITY_THRESHOLD.
 
         Returns:
-            Ready-to-use LSIRetriever instance.
+            Ready-to-use ``LSIRetriever`` instance.
         """
         instance = cls(
             repository=repository,
             document_store=document_store,
-            text_processor=text_processor,
             model_dir=model_dir,
             similarity_threshold=similarity_threshold,
         )
         instance.tfidf = TfidfProcessor.load(model_dir)
         instance.model = LSIModel.load(model_dir)
         return instance
+
