@@ -1,0 +1,53 @@
+version: "3.8"
+
+services:
+  sri:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sri-app
+    ports:
+      - "8501:8501"
+    volumes:
+      # Corpus and crawled data (persistent)
+      - ./data:/app/data
+      # Trained models and indices (persistent)
+      - ./models:/app/models
+      # Logs (optional, persistent)
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SRI_ENV=production
+      # ChromaDB configuration (if using embedded ChromaDB)
+      - CHROMA_DB_IMPL=duckdb
+      - PERSIST_DIRECTORY=/app/models/chroma
+    networks:
+      - sri-network
+    restart: unless-stopped
+    # Limit resources (optional)
+    # mem_limit: 2g
+    # cpus: '1.5'
+
+  # Optional: Run ChromaDB as a separate service for better performance
+  # Uncomment to use a separate ChromaDB server
+  # chromadb:
+  #   image: ghcr.io/chroma-core/chroma:latest
+  #   container_name: chroma-db
+  #   ports:
+  #     - "8000:8000"
+  #   volumes:
+  #     - chroma_data:/chroma/chroma
+  #   environment:
+  #     - ANONYMIZED_TELEMETRY=False
+  #   networks:
+  #     - sri-network
+  #   restart: unless-stopped
+
+networks:
+  sri-network:
+    driver: bridge
+
+# Uncomment if using separate ChromaDB service (volume required for persistence)
+# volumes:
+#   chroma_data:
+#     driver: local
