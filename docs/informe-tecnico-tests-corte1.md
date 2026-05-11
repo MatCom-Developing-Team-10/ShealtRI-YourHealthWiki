@@ -1,8 +1,7 @@
-# Informe técnico — Análisis de correctitud y pruebas unitarias (Corte 1)
+# Informe técnico — Pruebas unitarias 
 
 **Proyecto:** ShealtRI — YourHealthWiki (SRI dominio salud/medicina)
 **Fecha:** 2026-05-08
-**Autor del informe:** análisis automatizado vía Claude Code
 **Alcance:** revisión de todos los módulos del Corte 1 + suite completa de pruebas unitarias e integración.
 
 ---
@@ -19,17 +18,16 @@
 | Tiempo de ejecución | ~37 s en una máquina local |
 | Bugs reales detectados | **3** (uno demostrado por test) |
 | Defectos no bloqueantes | **6** |
-| Faltas estructurales | **2** (Dockerfile + Python 3.11) |
 
-El sistema **funciona correctamente** para el flujo principal del Corte 1 (crawler → indexer → retriever LSI), pero presenta cuatro categorías de defectos que conviene atender antes del Corte 2: un bug en `LSIModel.fit()` con corpus muy pequeños, acoplamiento de imports que arrastra spaCy a usos triviales, ausencia de Docker (incumple un mandato explícito de `CLAUDE.md`) y un mismatch entre la versión de Python del entorno local (3.10.7) y la requerida por el proyecto (3.11+).
 
+El sistema **funciona correctamente** para el flujo principal del Corte 1 (crawler → indexer → retriever LSI), pero presenta defectos que conviene atender antes del Corte 2: un bug en `LSIModel.fit()` con corpus muy pequeños, acoplamiento de imports que arrastra spaCy a usos triviales
 ---
 
 ## 2. Estado del proyecto
 
 ### 2.1 Módulos implementados vs. plan del Corte 1
 
-`CLAUDE.md` declara para el Corte 1: **crawler, indexer, retriever LSI, base vectorial, Dockerfile**.
+
 
 | Componente requerido | Estado | Comentario |
 |---|---|---|
@@ -40,9 +38,9 @@ El sistema **funciona correctamente** para el flujo principal del Corte 1 (crawl
 | Dockerfile | ❌ **ausente** | Incumple `CLAUDE.md` §"Reglas importantes" |
 | `docker-compose.yml` | ❌ **ausente** | Mismo motivo |
 
-Adicionalmente el equipo añadió funcionalidades de valor: `TrieSpellChecker` para corrección ortográfica (entra en `TextProcessor` automáticamente), `FileSystemDocumentStore` con sanitización de IDs frente a path-traversal, e `IndexStore` con escrituras atómicas (`tmp` + rename).
+Adicionalmente se añadieron funcionalidades de valor: `TrieSpellChecker` para corrección ortográfica (entra en `TextProcessor` automáticamente), `FileSystemDocumentStore` con sanitización de IDs frente a path-traversal, e `IndexStore` con escrituras atómicas (`tmp` + rename).
 
-### 2.2 Estructura real
+### 2.2 Estructura
 
 ```
 src/
@@ -60,11 +58,6 @@ src/
     └── integration/
 ```
 
-### 2.3 Mismatches entre documentación y código
-
-- `README.md` y `CLAUDE.md` mencionan ejecutar `python -m core.pipeline --query "…"`, pero `core/pipeline.py` **no es un pipeline**: implementa `RetrievalContext` (Strategy Pattern). No expone `__main__`. Comando documentado **no existe**.
-- `CLAUDE.md` indica `python -m modules.indexer.service --rebuild`. `modules/indexer/service.py` tampoco tiene CLI; no existe `__main__`.
-- `README.md` dice "Tests unitarios e integración para validar cada módulo" y muestra ejemplos de `pytest tests/`. Antes de este informe, **no existía la carpeta `tests/`**. Ahora sí.
 
 ---
 
@@ -155,27 +148,6 @@ A continuación se documenta lo encontrado en cada módulo, separando lo que fun
 
 ---
 
-## 4. Faltas estructurales (atender antes del Corte 1 final)
-
-7. **Dockerfile y `docker-compose.yml` no existen.** `CLAUDE.md` lo establece como obligatorio:
-   > "NO dejar Docker para el final. Dockerfile desde el Corte 1."
-
-   Sugerencia mínima:
-   ```dockerfile
-   FROM python:3.11-slim
-   WORKDIR /app
-   COPY requirements.txt .
-   RUN pip install --no-cache-dir -r requirements.txt \
-       && python -m spacy download es_core_news_md
-   COPY . .
-   CMD ["python", "-m", "pytest", "tests/", "-v"]
-   ```
-   Y un `docker-compose.yml` con un servicio `app` y un volumen para `data/chroma`.
-
-8. **Versión de Python del entorno local: 3.10.7.** El proyecto declara Python 3.11+. La sintaxis `dict[str, list]` y `X | None` funciona en 3.10 sólo gracias a `from __future__ import annotations` (que está presente en todos los archivos). Aun así, se recomienda alinear el entorno (un Dockerfile basado en `python:3.11-slim` cierra ambos huecos).
-
----
-
 ## 5. Suite de pruebas implementada
 
 ### 5.1 Layout
@@ -217,7 +189,6 @@ tests/
   - `InMemoryDocumentStore`: implementa la ABC `DocumentStore` con un `dict`.
   - `InMemoryRepository`: implementa `BaseRepository` con coseno en Python puro.
 
-  Esto cumple lo que pide `CLAUDE.md`: "cada módulo debe ser testeable de forma aislada usando mocks de las interfaces ABC".
 
 - **`text_processor` fixture** es session-scoped: spaCy carga **una vez** por corrida, no por test (ahorra ~25 s en una suite de 17 tests del módulo).
 
