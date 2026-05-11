@@ -39,21 +39,15 @@ class TestFit:
         assert model.n_components == 1
         assert all(len(v) == 1 for v in vectors)
 
-    def test_single_document_corpus_currently_fails(self):
-        """KNOWN BUG: with a single document, effective_k drops to 0.
+    def test_single_document_corpus_raises_valueerror(self):
+        """Single document corpus should raise ValueError with clear message.
 
-        ``LSIModel.fit()`` computes
-        ``effective_k = min(n_components, n_terms - 1, n_docs - 1)``.
-        When ``n_docs == 1`` this becomes ``min(..., 0)`` and TruncatedSVD
-        rejects ``n_components=0`` with InvalidParameterError.
-
-        The fix is to clamp ``effective_k = max(1, min(...))`` and degrade
-        gracefully (or raise a domain-level error). This test documents the
-        current (incorrect) behaviour so a future fix will flip it.
+        LSI requires at least 2 documents to compute SVD. A single document
+        cannot be decomposed into latent dimensions.
         """
         m = _matrix(rows=1, cols=5)
         model = LSIModel(n_components=2)
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match="at least 2 documents"):
             model.fit(m)
 
 
