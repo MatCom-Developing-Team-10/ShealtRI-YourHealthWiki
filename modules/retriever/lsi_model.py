@@ -60,9 +60,22 @@ class LSIModel:
         Returns:
             Document vectors in latent space — list of lists, one per
             document, each of length ``n_components``.
+
+        Raises:
+            ValueError: If corpus has fewer than 2 documents (LSI requires
+                at least 2 documents to decompose).
         """
         n_docs, n_terms = tfidf_matrix.shape
-        effective_k = min(self.n_components, n_terms - 1, n_docs - 1)
+        
+        # Validate minimum corpus size for SVD
+        if n_docs < 2:
+            raise ValueError(
+                f"LSI requires at least 2 documents to fit. "
+                f"Corpus has {n_docs} document(s)."
+            )
+        
+        # Clamp k: SVD requires k < min(n_docs, n_terms)
+        effective_k = max(1, min(self.n_components, n_terms - 1, n_docs - 1))
         if effective_k < self.n_components:
             self._svd = TruncatedSVD(
                 n_components=effective_k,
