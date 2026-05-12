@@ -126,6 +126,24 @@ class DocumentStore(ABC):
         """
         raise NotImplementedError("Delete not supported by this store")
 
+    def list_all_ids(self) -> list[str]:
+        """List all document IDs in the store.
+
+        Used by retrieval strategies (like web_search) to iterate over available documents
+        for fallback searches when primary retrieval strategies don't return enough results.
+
+        Default implementation raises NotImplementedError.
+        Subclasses should override if iteration is supported.
+
+        Returns:
+            List of all document IDs in the store.
+
+        Note:
+            For large collections, implement this efficiently (e.g., streaming from disk)
+            to avoid loading all documents into memory at once.
+        """
+        raise NotImplementedError("List all IDs not supported by this store")
+
 
 class BaseRepository(ABC):
     """Protocol for vector storage and similarity search.
