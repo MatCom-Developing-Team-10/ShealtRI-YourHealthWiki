@@ -84,7 +84,11 @@ def mock_store(sample_documents: dict[str, Document]) -> MockDocumentStore:
 @pytest.fixture
 def retriever(mock_store: MockDocumentStore) -> WebSearchRetriever:
     """Create a WebSearchRetriever instance with mock store."""
-    return WebSearchRetriever(document_store=mock_store)
+    from core.stopwords import ENGLISH_STOPWORDS
+    return WebSearchRetriever(
+        document_store=mock_store,
+        stopwords=ENGLISH_STOPWORDS
+    )
 
 
 # ---------------------------------------------------------------------------
