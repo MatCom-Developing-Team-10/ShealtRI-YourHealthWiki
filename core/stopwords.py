@@ -154,3 +154,6 @@ SPANISH_MEDICAL_ABBREVIATIONS: set[str] = {
 
 # For modules that expect Spanish-specific naming
 SPANISH_MEDICAL_STOPWORDS = ADDITIONAL_SPANISH_STOPWORDS
+
+# For modules that expect a generic medical abbreviations set
+MEDICAL_ABBREVIATIONS = SPANISH_MEDICAL_ABBREVIATIONS

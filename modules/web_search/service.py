@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from core.interfaces import BaseRepository, BaseRetriever, DocumentStore
 from core.models import Query, RetrievedDocument
+from core.stopwords import ENGLISH_STOPWORDS
 
 if TYPE_CHECKING:
     from core.models import Document
@@ -41,29 +42,14 @@ class WebSearchRetriever(BaseRetriever):
         document_store: Storage backend for retrieving full document content.
         repository: Vector storage (used for consistency, but not for scoring).
         min_results: Minimum results needed from LSI before activating web search.
-        stopwords: Set of English medical stopwords to filter out.
     """
-
-    # Common English + medical stopwords
-    STOPWORDS = {
-        "a", "an", "and", "are", "as", "at", "be", "but", "by", "do", "for",
-        "from", "had", "has", "have", "he", "her", "his", "how", "i", "if",
-        "in", "into", "is", "it", "its", "just", "may", "me", "my", "no",
-        "not", "now", "of", "on", "or", "out", "over", "own", "same", "she",
-        "so", "such", "the", "than", "that", "this", "to", "too", "up",
-        "was", "we", "what", "when", "where", "which", "who", "why", "will",
-        "with", "you", "your",
-        # Medical-specific stopwords
-        "disease", "condition", "symptom", "treatment", "patient", "health",
-        "medical", "clinical", "drug", "medication", "therapy", "doctor",
-        "hospital", "diagnosis",
-    }
 
     def __init__(
         self,
         document_store: DocumentStore,
         repository: BaseRepository | None = None,
         min_results: int = 5,
+        stopwords: set[str] | None = None,
     ) -> None:
         """Initialize the web search retriever.
 
@@ -72,10 +58,12 @@ class WebSearchRetriever(BaseRetriever):
             repository: Vector storage backend (optional, for consistency).
             min_results: Minimum results expected from LSI before web search activates.
                 Not enforced by this module; passed for context only.
+            stopwords: Custom stopwords set. Uses ENGLISH_STOPWORDS if None.
         """
         self.document_store = document_store
         self.repository = repository
         self.min_results = min_results
+        self.stopwords = stopwords if stopwords is not None else ENGLISH_STOPWORDS
 
     def retrieve(self, query: Query, top_k: int = 10) -> list[RetrievedDocument]:
         """Retrieve documents matching the query keywords.
@@ -160,7 +148,7 @@ class WebSearchRetriever(BaseRetriever):
         # Simple tokenization: lowercase, remove non-alphanumeric (except hyphens)
         tokens = re.findall(r'\b[a-záéíóúña-z0-9-]+\b', text.lower())
         # Filter stopwords and empty tokens
-        keywords = [t for t in tokens if t not in self.STOPWORDS and len(t) > 2]
+        keywords = [t for t in tokens if t not in self.stopwords and len(t) > 2]
         return keywords
 
     def _compute_score(self, doc: Document, keywords: list[str]) -> float:
