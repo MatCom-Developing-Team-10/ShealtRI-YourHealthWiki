@@ -33,7 +33,7 @@ from langchain_community.document_loaders import (
     CSVLoader,
 )
 from langchain_community.document_loaders.base import BaseLoader
-from langchain.schema import Document as LCDocument
+from langchain_core.documents import Document as LCDocument
 
 from core.models import Document
 
