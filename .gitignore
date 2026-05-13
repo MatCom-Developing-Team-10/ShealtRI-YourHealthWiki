@@ -205,3 +205,17 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# ShealtRI — generated at runtime, not tracked
+data/raw/
+!data/raw/.gitkeep
+data/chroma/
+!data/chroma/.gitkeep
+data/documents/
+!data/documents/.gitkeep
+models/
+!models/.gitkeep
+
+# Crawler output — raw scraped data, not source code
+medlineplus_files/
+nhs_files/
