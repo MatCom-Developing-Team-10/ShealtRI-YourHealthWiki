@@ -1,4 +1,4 @@
-"""Shared fixtures for the test suite.
+"""Shared pytest fixtures for the ShealtRI test suite.
 
 Conventions
 -----------
@@ -17,20 +17,18 @@ from pathlib import Path
 
 import pytest
 
-# Ensure the project root is importable when tests are run from any cwd.
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-
 from core.interfaces import BaseRepository, DocumentStore
 from core.models import Document
+from tests._synthetic_corpus import RAW_DOCUMENTS
 
 
 # ---------------------------------------------------------------------------
 # In-memory fakes for the data-layer ABCs
 # ---------------------------------------------------------------------------
-
 
 class InMemoryDocumentStore(DocumentStore):
     """Minimal in-memory DocumentStore used to keep retriever tests fast."""
@@ -95,7 +93,6 @@ class InMemoryRepository(BaseRepository):
 # Fixtures
 # ---------------------------------------------------------------------------
 
-
 @pytest.fixture
 def in_memory_store() -> InMemoryDocumentStore:
     return InMemoryDocumentStore()
@@ -106,27 +103,17 @@ def in_memory_repo() -> InMemoryRepository:
     return InMemoryRepository()
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def sample_documents() -> list[Document]:
+    """Twenty synthetic Spanish medical documents for pipeline/integration testing."""
     return [
         Document(
-            doc_id="d1",
-            text="La hipertensión arterial es una enfermedad cardiovascular crónica.",
-            url="https://example.org/hta",
-            metadata={"title": "HTA", "language": "es"},
-        ),
-        Document(
-            doc_id="d2",
-            text="La diabetes mellitus afecta el metabolismo de la glucosa en sangre.",
-            url="https://example.org/dm",
-            metadata={"title": "Diabetes", "language": "es"},
-        ),
-        Document(
-            doc_id="d3",
-            text="El asma es una enfermedad respiratoria inflamatoria crónica.",
-            url="https://example.org/asma",
-            metadata={"title": "Asma", "language": "es"},
-        ),
+            doc_id=d["doc_id"],
+            text=d["text"],
+            url=d["url"],
+            metadata={"title": d["title"]},
+        )
+        for d in RAW_DOCUMENTS
     ]
 
 
@@ -147,3 +134,15 @@ def text_processor():
     from modules.text_processor import TextProcessor
 
     return TextProcessor()
+
+
+@pytest.fixture
+def tmp_chroma_dir(tmp_path) -> str:
+    """Temporary directory for ChromaDB — isolated per test."""
+    return str(tmp_path / "chroma")
+
+
+@pytest.fixture
+def tmp_store_dir(tmp_path) -> str:
+    """Temporary directory for FileSystemDocumentStore — isolated per test."""
+    return str(tmp_path / "store")
