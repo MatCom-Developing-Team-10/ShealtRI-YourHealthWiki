@@ -12,11 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (leverage Docker layer caching)
-# This layer only rebuilds if requirements.txt changes
-COPY requirements.txt .
+# Each file is a separate layer — only rebuilds when that file changes
+COPY requirements.txt requirements-ui.txt ./
 
-# Install Python dependencies without cache to reduce image size
-RUN pip install --no-cache-dir -r requirements.txt
+# Install runtime + UI deps — extended timeout for slow connections
+RUN pip install --no-cache-dir --timeout=120 --retries=5 -r requirements-ui.txt
 
 # Download spaCy Spanish model after dependencies are installed
 RUN python -m spacy download es_core_news_md
