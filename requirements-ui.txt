@@ -1,0 +1,5 @@
+# UI dependencies — Corte 3 only
+# Install with: pip install -r requirements-ui.txt
+-r requirements.txt
+
+streamlit>=1.28.0
