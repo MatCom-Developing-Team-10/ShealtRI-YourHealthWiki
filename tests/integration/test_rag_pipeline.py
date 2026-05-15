@@ -11,10 +11,10 @@ from modules.rag.service import RAGService
 
 
 class TestRAGWithoutLLM:
-    """Test RAG module with fallback (no Gemini API required)."""
+    """Test RAG module with fallback (no Groq API required)."""
 
     def test_rag_generates_response_with_fallback(self):
-        """RAG should generate a response even without Gemini API."""
+        """RAG should generate a response even without Groq API."""
         rag = RAGService(api_key=None)
         docs = [
             RetrievedDocument(

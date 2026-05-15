@@ -88,7 +88,7 @@ class RAGResponse:
         profile_type: The profile that shaped the generation.
         sources: Documents used as context for generation.
         used_llm: True if an LLM produced the answer; False if template fallback.
-        model_name: LLM model identifier (e.g. "gemini-1.5-flash"), or
+        model_name: LLM model identifier (e.g. "llama-3.1-8b-instant"), or
             "template_fallback" when the LLM was unavailable.
         query_text: Original query text — stored for logging/display.
     """
