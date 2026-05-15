@@ -26,6 +26,9 @@ import sys
 import textwrap
 from pathlib import Path
 
+from dotenv import load_dotenv
+load_dotenv()  # Load .env file for GEMINI_API_KEY and other config
+
 # ---------------------------------------------------------------------------
 # Bootstrap path so the project root is on sys.path when running as a script
 # ---------------------------------------------------------------------------
