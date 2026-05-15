@@ -15,12 +15,11 @@ services:
       - ./models:/app/models
       # Logs (optional, persistent)
       - ./logs:/app/logs
+    stdin_open: true
+    tty: true
     environment:
       - PYTHONUNBUFFERED=1
       - SRI_ENV=production
-      # ChromaDB configuration (if using embedded ChromaDB)
-      - CHROMA_DB_IMPL=duckdb
-      - PERSIST_DIRECTORY=/app/models/chroma
     networks:
       - sri-network
     restart: unless-stopped
