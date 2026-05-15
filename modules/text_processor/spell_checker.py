@@ -57,6 +57,28 @@ class TrieSpellChecker:
             node = node.children[char]
         return node.is_end
 
+    def words(self) -> list[str]:
+        """Enumerate every word currently stored in the Trie.
+
+        Used by the index store to persist the spell-check vocabulary so
+        that queries can still be corrected after a process restart.
+
+        Returns:
+            Unsorted list of all known words.
+        """
+        collected: list[str] = []
+        self._collect_words(self.root, "", collected)
+        return collected
+
+    def _collect_words(
+        self, node: _TrieNode, prefix: str, out: list[str]
+    ) -> None:
+        """Depth-first walk to materialize every full word under ``node``."""
+        if node.is_end:
+            out.append(prefix)
+        for char, child in node.children.items():
+            self._collect_words(child, prefix + char, out)
+
     @staticmethod
     def _levenshtein(a: str, b: str) -> int:
         """Calculate Levenshtein distance between two strings."""

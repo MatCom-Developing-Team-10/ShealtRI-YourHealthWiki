@@ -33,7 +33,7 @@ from langchain_community.document_loaders import (
     CSVLoader,
 )
 from langchain_community.document_loaders.base import BaseLoader
-from langchain.schema import Document as LCDocument
+from langchain_core.documents import Document as LCDocument
 
 from core.models import Document
 
@@ -395,9 +395,11 @@ class DocumentLoader:
                 - url: from metadata["source"] or empty
                 - metadata: rest of metadata
         """
-        # Generate doc_id from source path or create UUID
+        # Generate doc_id from source path — include page number to avoid duplicates
         source = lc_doc.metadata.get("source", "")
-        doc_id = Path(source).stem if source else f"doc_{hash(lc_doc.page_content)}"
+        stem = Path(source).stem if source else f"doc_{hash(lc_doc.page_content)}"
+        page = lc_doc.metadata.get("page")
+        doc_id = f"{stem}_p{page}" if page is not None else stem
 
         # Extract URL from metadata (if present)
         url = lc_doc.metadata.get("url", lc_doc.metadata.get("source", ""))
