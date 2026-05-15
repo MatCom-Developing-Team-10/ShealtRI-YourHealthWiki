@@ -8,7 +8,7 @@ Architecture:
     5. On any API failure, fall back to template-based response.
     6. Return RAGResponse with provenance metadata.
 
-Gemini is called via the google-generativeai SDK.
+Gemini is called via the google-genai SDK (google.generativeai is deprecated).
 """
 
 from __future__ import annotations
@@ -69,13 +69,16 @@ class RAGService(BaseRAG):
 
         if self.api_key:
             try:
-                import google.generativeai as genai
+                try:
+                    import google.genai as genai
+                except ImportError:
+                    import google.generativeai as genai
                 genai.configure(api_key=self.api_key)
                 self._client = genai
                 logger.info("Gemini API initialized with model %s", model_name)
             except ImportError:
                 logger.warning(
-                    "google-generativeai not installed. "
+                    "google-genai or google-generativeai not installed. "
                     "RAG will use template fallback only."
                 )
             except Exception as exc:
