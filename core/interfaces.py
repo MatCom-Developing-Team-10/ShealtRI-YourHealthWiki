@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from core.models import Query, Document, RetrievedDocument
+from core.models import Query, Document, RetrievedDocument, RAGResponse
 
 
 # ---------------------------------------------------------------------------
@@ -169,4 +169,39 @@ class BaseRetriever(ABC):
     @abstractmethod
     def retrieve(self, query: Query, top_k: int = 10) -> list[RetrievedDocument]:
         """Execute a retrieval strategy for the given query."""
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
+# RAG generation strategy contract
+# ---------------------------------------------------------------------------
+
+
+class BaseRAG(ABC):
+    """Strategy interface for profile-aware answer generation.
+
+    A concrete implementation receives the original query, the retrieved
+    documents as context, and produces a RAGResponse. The profile is
+    read from query.user_profile. If user_profile is None, the
+    implementation defaults to PATIENT profile.
+    """
+
+    @abstractmethod
+    def generate(
+        self,
+        query: Query,
+        retrieved_docs: list[RetrievedDocument],
+        max_context_docs: int = 3,
+    ) -> RAGResponse:
+        """Generate a profile-adapted answer.
+
+        Args:
+            query: The original user query, may carry a UserProfile.
+            retrieved_docs: Ranked documents from the retriever.
+            max_context_docs: Maximum number of documents to include in
+                the LLM context window. Default is 3 to stay within limits.
+
+        Returns:
+            RAGResponse with the generated answer and provenance metadata.
+        """
         raise NotImplementedError
