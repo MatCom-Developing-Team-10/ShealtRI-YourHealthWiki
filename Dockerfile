@@ -39,5 +39,6 @@ EXPOSE 8501
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:8501')" || exit 1
 
-# Default command: run Streamlit UI
-CMD ["streamlit", "run", "ui/app.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
+# Default command: console interface (Corte 1-2)
+# Switch to streamlit in Corte 3: CMD ["streamlit", "run", "ui/app.py", ...]
+CMD ["python", "cli.py"]
