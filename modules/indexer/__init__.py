@@ -1,5 +1,4 @@
-<<<<<<< HEAD
-"""Indexer module for document storage and corpus building."""
+"""Indexer module for document storage, corpus building, and persistence."""
 
 from .document_store import (
     DocumentReadError,
@@ -7,6 +6,7 @@ from .document_store import (
     DocumentWriteError,
     FileSystemDocumentStore,
 )
+from .index_store import IndexStore, IndexStoreError
 from .service import IndexerConfig, IndexerService
 
 __all__ = [
@@ -18,25 +18,7 @@ __all__ = [
     # Indexer service
     "IndexerService",
     "IndexerConfig",
+    # Indexer persistence / management
+    "IndexStore",
+    "IndexStoreError",
 ]
-=======
-"""Indexer module for document storage and preprocessing."""
-
-from .document_store import (
-    DocumentReadError,
-    DocumentStoreError,
-    DocumentWriteError,
-    FileSystemDocumentStore,
-)
-
-<<<<<<< HEAD
-__all__ = ["FileSystemDocumentStore"]
->>>>>>> 2491ed1 (feat: Enhance LSI retrieval system with new data structures and storage layers)
-=======
-__all__ = [
-    "FileSystemDocumentStore",
-    "DocumentStoreError",
-    "DocumentWriteError",
-    "DocumentReadError",
-]
->>>>>>> d9ec2fc (feat: Enhance document storage and retrieval with error handling and new methods)
