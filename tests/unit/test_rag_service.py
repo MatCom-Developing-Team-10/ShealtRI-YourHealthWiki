@@ -1,4 +1,4 @@
-"""Tests for RAGService — Gemini integration with fallback."""
+"""Tests for RAGService — Groq integration with fallback."""
 
 from unittest.mock import MagicMock, patch
 
@@ -25,7 +25,7 @@ def _make_query(text="diabetes síntomas", profile_type=UserProfileType.PATIENT)
 
 
 class TestRAGServiceFallback:
-    """Test template fallback when Gemini is unavailable."""
+    """Test template fallback when Groq is unavailable."""
 
     def test_fallback_when_no_api_key(self):
         """Service without API key should use fallback."""
@@ -62,30 +62,29 @@ class TestRAGServiceFallback:
         assert len(response_student.answer) > 0
 
 
-class TestRAGServiceGeminiSuccess:
-    """Test happy path with mocked Gemini response."""
+class TestRAGServiceGroqSuccess:
+    """Test happy path with mocked Groq response."""
 
     def test_generate_uses_llm_when_available(self):
-        """Mock Gemini to return a successful response."""
-        with patch("modules.rag.service.os.environ.get") as mock_env:
-            mock_env.return_value = "fake-api-key"
+        """Mock Groq to return a successful response."""
+        with patch("groq.Groq") as mock_groq_class:
+            mock_client = MagicMock()
+            mock_groq_class.return_value = mock_client
 
-            with patch("modules.rag.service.genai") as mock_genai:
-                mock_model = MagicMock()
-                mock_response = MagicMock()
-                mock_response.text = "La diabetes es una enfermedad metabólica..."
-                mock_model.generate_content.return_value = mock_response
-                mock_genai.GenerativeModel.return_value = mock_model
+            mock_response = MagicMock()
+            mock_choice = MagicMock()
+            mock_choice.message.content = "La diabetes es una enfermedad metabólica..."
+            mock_response.choices = [mock_choice]
+            mock_client.chat.completions.create.return_value = mock_response
 
-                service = RAGService(api_key="fake-api-key")
-                service._client = mock_genai
-                query = _make_query()
-                docs = [_make_retrieved()]
-                response = service.generate(query, docs)
+            service = RAGService(api_key="fake-api-key")
+            query = _make_query()
+            docs = [_make_retrieved()]
+            response = service.generate(query, docs)
 
         assert response.used_llm is True
         assert "diabetes" in response.answer.lower() or len(response.answer) > 0
-        assert response.model_name == "gemini-1.5-flash"
+        assert response.model_name == "llama-3.1-8b-instant"
 
     def test_generate_with_no_user_profile_defaults_to_patient(self):
         service = RAGService(api_key=None)
@@ -109,13 +108,12 @@ class TestRAGServiceAvailability:
         assert service.is_available() is False
 
     def test_is_available_returns_true_with_api_key_and_client(self):
-        with patch("modules.rag.service.os.environ.get") as mock_env:
-            mock_env.return_value = "fake-key"
+        with patch("groq.Groq") as mock_groq_class:
+            mock_client = MagicMock()
+            mock_groq_class.return_value = mock_client
 
-            with patch("modules.rag.service.genai") as mock_genai:
-                service = RAGService(api_key="fake-key")
-                service._client = mock_genai
-                assert service.is_available() is True
+            service = RAGService(api_key="fake-key")
+            assert service.is_available() is True
 
 
 class TestRAGServiceProfileResolution:

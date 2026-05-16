@@ -2,7 +2,7 @@
 
 ## Introducción
 
-El módulo RAG (Retrieval-Augmented Generation) de ShealtRI genera respuestas médicas **adaptadas al perfil del usuario**. Cada usuario se identifica con uno de 6 roles, y el sistema ajusta automáticamente el tono, vocabulario y nivel de detalle de la respuesta.
+El módulo RAG (Retrieval-Augmented Generation) de ShealtRI genera respuestas médicas **adaptadas al perfil del usuario**. Cada usuario se identifica con uno de 6 roles, y el sistema ajusta automáticamente el tono, vocabulario y nivel de detalle de la respuesta. Las respuestas son generadas por el modelo **Llama 3.1 8B** a través de la API de **Groq**, ofreciendo un tier gratuito generoso (30 req/min, ~14,400 req/día).
 
 ## Perfiles Soportados
 
@@ -48,7 +48,7 @@ Query> síntomas de diabetes
        http://example.com/treatment
        ...
 
-  ──── Respuesta generada [Estudiante De Medicina | gemini-1.5-flash] ────
+  ──── Respuesta generada [Estudiante De Medicina | llama-3.1-8b-instant] ────
   
   La diabetes mellitus es un trastorno metabólico caracterizado por
   defectos en la secreción de insulina y/o resistencia periférica...
@@ -94,7 +94,7 @@ RAGService.generate()
     ├─→ ProfileRegistry.get(profile_type)
     ├─→ build_context_block(docs)
     ├─→ render_prompt(profile_config, query, context)
-    ├─→ _call_gemini(prompt)
+    ├─→ _call_llm(prompt)
     │   ├─ API Success → answer_text
     │   └─ API Error → "" (fallback)
     ├─→ build_fallback_response() [si no hubo API]
@@ -109,14 +109,14 @@ Registro inmutable de las 6 configuraciones de perfil. Cada perfil tiene:
 - `tone`: Descripción del tono vocal
 - `vocabulary_level`: Nivel de tecnicismo
 - `focus_areas`: Áreas de enfoque prioritario
-- `system_prompt`: Plantilla de instrucción para Gemini
+- `system_prompt`: Plantilla de instrucción para Groq
 
 #### `RAGService(BaseRAG)`
 Implementa la interfaz `BaseRAG`. Encargado de:
 1. Resolver el perfil (default a PATIENT si no hay)
 2. Construir bloque de contexto desde documentos
 3. Renderizar el prompt con placeholders {query}, {context}, {focus_areas}
-4. Llamar a Gemini API (o fallback si no hay API key)
+4. Llamar a Groq API (o fallback si no hay API key)
 5. Retornar `RAGResponse` con provenance
 
 #### `build_context_block(docs, max_docs=3)`
@@ -132,14 +132,14 @@ Renderiza el prompt usando `str.format_map` con:
 - `{focus_areas}`: áreas de enfoque del perfil
 
 #### `build_fallback_response(profile_config, query_text, docs)`
-Genera una respuesta template-based adaptada al perfil cuando Gemini no está disponible.
+Genera una respuesta template-based adaptada al perfil cuando Groq no está disponible.
 
 ### Configuración
 
-#### Variable de entorno: `GEMINI_API_KEY`
+#### Variable de entorno: `GROQ_API_KEY`
 
-La API key de Gemini se configura vía:
-1. Variable de entorno `GEMINI_API_KEY`
+La API key de Groq se configura vía:
+1. Variable de entorno `GROQ_API_KEY`
 2. Parámetro `api_key` en el constructor de `RAGService`
 
 Si ninguno está seteado, el sistema usa fallback (respuestas template).
@@ -147,21 +147,27 @@ Si ninguno está seteado, el sistema usa fallback (respuestas template).
 En Docker Compose:
 ```yaml
 environment:
-  - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+  - GROQ_API_KEY=${GROQ_API_KEY:-}
 ```
 
 Ejecutar con API key:
 ```bash
-export GEMINI_API_KEY="gsk_..."
+export GROQ_API_KEY="gsk_..."
 python cli.py --query "fiebre alta" --profile paciente
 ```
 
-#### Parámetros de Gemini
+Para obtener una API key de Groq:
+1. Visita https://console.groq.com/keys
+2. Crea una cuenta gratuita o inicia sesión
+3. Genera una nueva API key
+4. Cópiala a tu archivo `.env` en la variable `GROQ_API_KEY`
 
-En `RAGService._call_gemini()`:
+#### Parámetros de Groq
+
+En `RAGService._call_llm()`:
 - `temperature: 0.3` — bajo para respuestas factuales
 - `top_p: 0.9` — diversidad controlada
-- `max_output_tokens: 512` — aproximadamente 400 palabras en español
+- `max_tokens: 512` — aproximadamente 400 palabras en español
 
 ## Ejemplos de Uso
 
@@ -189,7 +195,7 @@ $ python cli.py --profile estudiante --query "mecanismo de acción de la metform
 
 [Retrievals...]
 
-  ──── Respuesta generada [Estudiante De Medicina | gemini-1.5-flash] ────
+  ──── Respuesta generada [Estudiante De Medicina | llama-3.1-8b-instant] ────
 
   La metformina es un agente antihiperglucemiante de la clase de las
   biguanidas. Su mecanismo principal es:
@@ -203,7 +209,7 @@ $ python cli.py --profile estudiante --query "mecanismo de acción de la metform
 ```bash
 $ python cli.py --profile diagnostico --query "cefalea progresiva con fotofobia"
 
-  ──── Respuesta generada [Diagnostico Asistido | gemini-1.5-flash] ────
+  ──── Respuesta generada [Diagnostico Asistido | llama-3.1-8b-instant] ────
 
   **Diagnósticos más probables:**
   1. Migraña — fotofobia y cefalea progresiva son hallazgos típicos
@@ -223,9 +229,9 @@ $ python cli.py --profile diagnostico --query "cefalea progresiva con fotofobia"
   - Cambios en la conciencia
 ```
 
-## Fallback: Comportamiento sin Gemini API
+## Fallback: Comportamiento sin Groq API
 
-Si `GEMINI_API_KEY` no está seteada o la API falla:
+Si `GROQ_API_KEY` no está seteada o la API falla:
 
 1. El sistema sigue funcionando normalmente
 2. Las respuestas se generan con plantillas adaptadas al perfil
@@ -256,7 +262,7 @@ python -m pytest tests/integration/test_rag_pipeline.py -v
 ```
 
 Cubre:
-- Flujo end-to-end sin Gemini API
+- Flujo end-to-end sin Groq API
 - Adaptación de respuestas a perfiles
 - Manejo de listas vacías
 - Respeto a límites de documentos
@@ -309,20 +315,20 @@ El sistema viene con 6 perfiles predefinidos. Para agregar más:
 ## Notas Importantes
 
 1. **Sin API key**: El sistema funciona con fallback, pero sin respuestas generadas por LLM.
-2. **Tasa límite de Gemini**: El tier gratuito permite 15 req/min y 1500/día — suficiente para desarrollo y defensa.
-3. **Lenguaje**: Todas las respuestas están en español. Las instrucciones a Gemini están en español.
-4. **Reproducibilidad**: Sin servicios en la nube (excepto Gemini API). Todo corre localmente.
+2. **Tasa límite de Groq**: El tier gratuito permite 30 req/min y ~14,400 req/día — muy generoso para desarrollo, testing y defensa.
+3. **Lenguaje**: Todas las respuestas están en español. Las instrucciones a Groq están en español.
+4. **Reproducibilidad**: Sin servicios en la nube (excepto Groq API). Todo corre localmente.
 
 ## Preguntas Frecuentes
 
-**P: ¿Qué pasa si Gemini está muy lento?**
+**P: ¿Qué pasa si Groq está muy lento?**
 A: El `timeout` es de 60 segundos. Si se excede, se usa fallback.
 
-**P: ¿Puedo cambiar el modelo de Gemini?**
-A: Sí, pasar `model_name="gemini-2.0-flash"` al constructor de `RAGService`.
+**P: ¿Puedo cambiar el modelo de Groq?**
+A: Sí, pasar `model_name="mixtral-8x7b-32768"` u otro modelo disponible al constructor de `RAGService`. Los modelos disponibles están en https://console.groq.com/docs/models.
 
 **P: ¿Cómo agrego más perfiles?**
 A: Ver sección "Crear un perfil personalizado" arriba.
 
 **P: ¿El fallback es bueno?**
-A: Es funcional y informativo, pero no tan pulido como Gemini. La API key es gratuita.
+A: Es funcional e informativo, pero no tan pulido como Groq. La API key es gratuita y no requiere tarjeta de crédito.
