@@ -7,6 +7,9 @@ Two modes:
     One-shot query:
         python cli.py --query "síntomas de hipertensión"
 
+    With user profile:
+        python cli.py --query "diabetes tipo 2" --profile estudiante
+
     Show corpus statistics only:
         python cli.py --stats
 
@@ -20,7 +23,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import textwrap
 from pathlib import Path
+
+from dotenv import load_dotenv
+load_dotenv()  # Load .env file for GEMINI_API_KEY and other config
 
 # ---------------------------------------------------------------------------
 # Bootstrap path so the project root is on sys.path when running as a script
@@ -29,7 +36,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from core.models import Document, Query
+from core.models import Document, Query, UserProfile, UserProfileType
 from core.pipeline import RetrievalContext
 from infra.chroma_repository import ChromaRepository
 from modules.document_loader.service import DocumentLoader, DocumentLoaderError
@@ -37,12 +44,22 @@ from modules.indexer.document_store import FileSystemDocumentStore
 from modules.indexer.service import IndexerService
 from modules.retriever.service import LSIRetriever
 from modules.text_processor.service import TextProcessor
+from modules.rag.service import RAGService
 from tests._synthetic_corpus import RAW_DOCUMENTS
 
 _CHROMA_DIR = "data/chroma"
 _STORE_DIR = "data/documents"
 _MODELS_DIR = "models/lsi"
 _RAW_DIR = Path("data/raw")
+
+_PROFILE_MAP: dict[str, UserProfileType] = {
+    "paciente": UserProfileType.PATIENT,
+    "estudiante": UserProfileType.MEDICAL_STUDENT,
+    "medico": UserProfileType.MEDICAL_PROFESSIONAL,
+    "diagnostico": UserProfileType.DIAGNOSTIC_ASSISTANT,
+    "natural": UserProfileType.NATURAL_MEDICINE,
+    "cuidador": UserProfileType.CAREGIVER,
+}
 
 _BANNER = """
 ╔══════════════════════════════════════════════════╗
@@ -131,6 +148,7 @@ class Pipeline:
             model_dir=_MODELS_DIR,
         )
         self.context = RetrievalContext(strategy=self.retriever)
+        self.rag_service = RAGService()
         self.corpus = None
         self._source_label = ""
 
@@ -164,11 +182,27 @@ class Pipeline:
         self.retriever.fit(self.corpus)
         print(f"done  [{n_docs} docs, {n_terms} terms]")
 
-    def retrieve(self, query_text: str, top_k: int = 5) -> list:
-        """Run the full query pipeline and return retrieved documents."""
+    def retrieve(
+        self, query_text: str, top_k: int = 5, user_profile: UserProfile | None = None
+    ) -> tuple[list, object | None]:
+        """Run the full query pipeline and return retrieved documents and RAG response.
+
+        Returns:
+            Tuple of (retrieved_documents, rag_response).
+            rag_response is None if the RAG service fails.
+        """
         query_corpus = self.indexer.build_query(query_text)
-        query = Query(text=query_text, indexed_corpus=query_corpus)
-        return self.context.execute_search(query, top_k=top_k)
+        query = Query(text=query_text, indexed_corpus=query_corpus, user_profile=user_profile)
+        results = self.context.execute_search(query, top_k=top_k)
+
+        rag_response = None
+        if results:
+            try:
+                rag_response = self.rag_service.generate(query, results)
+            except Exception as exc:
+                print(f"  [warn] RAG generation failed: {exc}", file=sys.stderr)
+
+        return results, rag_response
 
     def stats(self) -> dict:
         """Return corpus statistics."""
@@ -208,6 +242,26 @@ def _print_stats(stats: dict) -> None:
             print(f"  {key:<25}: {value}")
 
 
+def _print_rag_response(response: object) -> None:
+    """Display a RAG-generated response with profile metadata."""
+    if not response or not hasattr(response, 'answer'):
+        return
+
+    profile_label = response.profile_type.value.replace("_", " ").title()
+    backend = response.model_name if response.used_llm else "plantilla (sin LLM)"
+    print(f"\n  ──── Respuesta generada [{profile_label} | {backend}] ────")
+    print()
+
+    for line in response.answer.splitlines():
+        if line.strip():
+            wrapped = textwrap.fill(
+                line, width=78, initial_indent="  ", subsequent_indent="  "
+            )
+            print(wrapped)
+        else:
+            print()
+
+
 def _print_help() -> None:
     print("""
   Commands:
@@ -222,8 +276,10 @@ def _print_help() -> None:
 # Entry points
 # ---------------------------------------------------------------------------
 
-def run_interactive(pipeline: Pipeline) -> None:
+def run_interactive(pipeline: Pipeline, user_profile: UserProfile | None = None) -> None:
     print(_BANNER)
+    if user_profile:
+        print(f"  Perfil: {user_profile.name}")
     print()
     try:
         while True:
@@ -248,8 +304,10 @@ def run_interactive(pipeline: Pipeline) -> None:
                 _print_help()
                 continue
 
-            results = pipeline.retrieve(raw)
+            results, rag_response = pipeline.retrieve(raw, user_profile=user_profile)
             _print_results(results, raw)
+            if rag_response:
+                _print_rag_response(rag_response)
             print()
 
     except Exception as exc:
@@ -257,9 +315,11 @@ def run_interactive(pipeline: Pipeline) -> None:
         sys.exit(1)
 
 
-def run_oneshot(pipeline: Pipeline, query: str) -> None:
-    results = pipeline.retrieve(query)
+def run_oneshot(pipeline: Pipeline, query: str, user_profile: UserProfile | None = None) -> None:
+    results, rag_response = pipeline.retrieve(query, user_profile=user_profile)
     _print_results(results, query)
+    if rag_response:
+        _print_rag_response(rag_response)
     print()
 
 
@@ -274,6 +334,17 @@ def main() -> None:
         "--top-k", type=int, default=5, metavar="K",
         help="Number of results to return (default: 5)",
     )
+    parser.add_argument(
+        "--profile", "-p",
+        choices=list(_PROFILE_MAP.keys()),
+        default="paciente",
+        metavar="PERFIL",
+        help=(
+            "User profile for RAG-generated responses. "
+            "Options: paciente, estudiante, medico, diagnostico, natural, cuidador. "
+            "(default: paciente)"
+        ),
+    )
     args = parser.parse_args()
 
     print("[ShealtRI] Loading pipeline...")
@@ -281,12 +352,20 @@ def main() -> None:
     pipeline.build()
     print()
 
+    user_profile = UserProfile(
+        profile_type=_PROFILE_MAP[args.profile],
+        name=args.profile.capitalize(),
+    ) if args.profile != "paciente" else UserProfile(
+        profile_type=UserProfileType.PATIENT,
+        name="Paciente",
+    )
+
     if args.stats:
         _print_stats(pipeline.stats())
     elif args.query:
-        run_oneshot(pipeline, args.query)
+        run_oneshot(pipeline, args.query, user_profile=user_profile)
     else:
-        run_interactive(pipeline)
+        run_interactive(pipeline, user_profile=user_profile)
 
 
 if __name__ == "__main__":
