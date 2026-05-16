@@ -42,6 +42,8 @@ class LSIModel:
         self.n_components = n_components
         self._svd = TruncatedSVD(
             n_components=n_components,
+            algorithm="randomized",
+            n_iter=10,
             random_state=random_state,
         )
         self._fitted = False
@@ -79,6 +81,8 @@ class LSIModel:
         if effective_k < self.n_components:
             self._svd = TruncatedSVD(
                 n_components=effective_k,
+                algorithm="randomized",
+                n_iter=10,
                 random_state=self._svd.random_state,
             )
             self.n_components = effective_k

@@ -33,7 +33,7 @@ class LSIRetriever(BaseRetriever):
     """
 
     # Default similarity threshold - results below this score are filtered out
-    DEFAULT_SIMILARITY_THRESHOLD = 0.4
+    DEFAULT_SIMILARITY_THRESHOLD = 0.1
 
     def __init__(
         self,
