@@ -2,7 +2,7 @@
 
 from .service import TextProcessor, TextProcessorConfig
 from .spell_checker import TrieSpellChecker
-from .stopwords import (
+from core.stopwords import (
     ADDITIONAL_SPANISH_STOPWORDS,
     MEDICAL_ABBREVIATIONS,
     SPANISH_MEDICAL_STOPWORDS,  # Alias for backward compatibility

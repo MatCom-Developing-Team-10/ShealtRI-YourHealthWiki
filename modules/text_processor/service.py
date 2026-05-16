@@ -28,8 +28,8 @@ import spacy
 from nltk.corpus import stopwords as nltk_stopwords
 from spacy.language import Language
 
+from core.stopwords import SPANISH_MEDICAL_STOPWORDS
 from .spell_checker import TrieSpellChecker
-from .stopwords import SPANISH_MEDICAL_STOPWORDS
 
 
 logger = logging.getLogger(__name__)
