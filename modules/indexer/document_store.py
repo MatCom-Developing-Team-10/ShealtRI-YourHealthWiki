@@ -58,12 +58,17 @@ class FileSystemDocumentStore(DocumentStore):
 
     For production scale (>100K documents), consider migrating to SQLite or PostgreSQL.
 
+    Storage directory convention:
+        data/documents/corpus/     — curated crawler documents (default).
+        data/documents/web_search/ — externally fetched web documents (future).
+        Keep these separate to avoid contaminating the curated corpus.
+
     Raises:
         DocumentWriteError: When a document cannot be saved to disk.
         DocumentReadError: When a document cannot be read from disk.
     """
 
-    def __init__(self, storage_dir: str = "data/documents") -> None:
+    def __init__(self, storage_dir: str = "data/documents/corpus") -> None:
         """Initialize the document store.
 
         Args:
