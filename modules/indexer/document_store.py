@@ -225,6 +225,28 @@ class FileSystemDocumentStore(DocumentStore):
                 f"Cannot delete document '{doc_id}': {e}"
             ) from e
 
+    def list_all_ids(self) -> list[str]:
+        """List all document IDs stored in the filesystem.
+
+        Iterates over every JSON file in the storage directory and reads the
+        ``doc_id`` field from each one. Hashed filenames are handled transparently
+        because the original ID is always written inside the JSON body.
+
+        Returns:
+            List of document IDs found in storage. Order is filesystem-dependent.
+        """
+        ids: list[str] = []
+        for json_file in self.storage_dir.glob("*.json"):
+            try:
+                with open(json_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    ids.append(data["doc_id"])
+            except (json.JSONDecodeError, KeyError, OSError) as e:
+                logger.debug(
+                    "list_all_ids: skipping unreadable file '%s': %s", json_file.name, e
+                )
+        return ids
+
     def _get_document_path(self, doc_id: str) -> Path:
         """Compute a safe filesystem path for a document ID.
 
