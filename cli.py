@@ -42,7 +42,9 @@ from infra.chroma_repository import ChromaRepository
 from modules.document_loader.service import DocumentLoader, DocumentLoaderError
 from modules.indexer.document_store import FileSystemDocumentStore
 from modules.indexer.service import IndexerService
+from modules.retriever.fallback_retriever import FallbackRetriever
 from modules.retriever.service import LSIRetriever
+from modules.web_search import InternetSearchRetriever, WebContentFetcher
 from modules.text_processor.service import TextProcessor
 from modules.rag.service import RAGService
 from tests._synthetic_corpus import RAW_DOCUMENTS
@@ -142,10 +144,19 @@ class Pipeline:
             collection_name="medical_documents",
         )
         self.document_store = FileSystemDocumentStore(storage_dir=_STORE_DIR)
-        self.retriever = LSIRetriever(
+        _lsi = LSIRetriever(
             repository=self.repository,
             document_store=self.document_store,
             model_dir=_MODELS_DIR,
+        )
+        _internet = InternetSearchRetriever(
+            fetcher=WebContentFetcher(),
+            document_store=self.document_store,
+        )
+        self.retriever = FallbackRetriever(
+            primary=_lsi,
+            fallback=_internet,
+            min_results=3,
         )
         self.context = RetrievalContext(strategy=self.retriever)
         self.rag_service = RAGService()
