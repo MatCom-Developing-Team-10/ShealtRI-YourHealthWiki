@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 
-from core.interfaces import BaseRetriever
+from core.interfaces import BaseRetriever, IndexedCorpus
 from core.models import Query, RetrievedDocument
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,18 @@ class FallbackRetriever(BaseRetriever):
         self.primary = primary
         self.fallback = fallback
         self.min_results = min_results
+
+    def fit(self, corpus: IndexedCorpus) -> None:
+        """Fit the primary retriever on the given corpus.
+
+        Delegates to the primary retriever's ``fit`` method. The fallback
+        retriever (e.g., ``InternetSearchRetriever``) is network-based and
+        does not require fitting.
+
+        Args:
+            corpus: Preprocessed corpus from the indexer.
+        """
+        self.primary.fit(corpus)
 
     def retrieve(self, query: Query, top_k: int = 10) -> list[RetrievedDocument]:
         """Retrieve documents using primary strategy with optional fallback.
