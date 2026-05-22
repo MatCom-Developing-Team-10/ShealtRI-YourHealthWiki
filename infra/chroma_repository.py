@@ -2,12 +2,21 @@
 
 This repository stores only document IDs, embeddings, and minimal metadata (URLs).
 Full document text is stored separately in a DocumentStore implementation.
+
+Collection naming convention:
+    CORPUS_COLLECTION     — curated documents indexed from the crawler.
+    WEB_SEARCH_COLLECTION — documents fetched from external web searches (future).
+    Never mix both sources in the same collection.
 """
 
 import chromadb
 
 from core.interfaces import BaseRepository
 from core.models import Document
+
+# ChromaDB collection names — one per data source to prevent corpus contamination.
+CORPUS_COLLECTION = "corpus_curated"
+WEB_SEARCH_COLLECTION = "web_search_results"
 
 
 class ChromaRepository(BaseRepository):
@@ -20,12 +29,15 @@ class ChromaRepository(BaseRepository):
 
     Full document text is stored separately in a DocumentStore.
     This separation improves scalability and reduces vector DB costs.
+
+    Use CORPUS_COLLECTION for the curated crawler corpus and
+    WEB_SEARCH_COLLECTION for any externally fetched web documents.
     """
 
     def __init__(
         self,
         persist_directory: str = "data/chroma",
-        collection_name: str = "medical_documents",
+        collection_name: str = CORPUS_COLLECTION,
     ) -> None:
         """Initialize ChromaDB client and collection.
 
