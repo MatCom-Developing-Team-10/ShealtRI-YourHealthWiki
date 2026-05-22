@@ -135,7 +135,7 @@ class WebContentFetcher:
             List of (url, title, snippet) tuples. Empty list on failure.
         """
         try:
-            from duckduckgo_search import DDGS
+            from ddgs import DDGS
 
             with DDGS() as ddgs:
                 raw = list(ddgs.text(query, max_results=max_results))
@@ -152,8 +152,8 @@ class WebContentFetcher:
 
         except ImportError:
             logger.error(
-                "duckduckgo_search is not installed. "
-                "Run: pip install duckduckgo-search"
+                "ddgs is not installed. "
+                "Run: pip install ddgs"
             )
             return []
         except Exception as e:

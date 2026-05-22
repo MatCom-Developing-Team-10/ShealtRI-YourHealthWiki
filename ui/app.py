@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -162,7 +162,7 @@ async def get_video(filename: str) -> FileResponse:
     """Serve video files for avatar states."""
     video_path = static_dir / "videos" / filename
     if not video_path.exists():
-        return FileResponse(status_code=404)
+        raise HTTPException(status_code=404, detail="Video not found")
     return FileResponse(path=video_path, media_type="video/mp4")
 
 
