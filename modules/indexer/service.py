@@ -31,6 +31,7 @@ from dataclasses import dataclass
 
 from core.interfaces import IndexedCorpus
 from core.models import Document
+from modules.indexer.chunker import TextChunker
 from modules.text_processor import TextProcessor
 
 
@@ -81,6 +82,7 @@ class IndexerService:
         self,
         text_processor: TextProcessor,
         config: IndexerConfig | None = None,
+        chunker: TextChunker | None = None,
     ) -> None:
         """Initialize the indexer service.
 
@@ -89,9 +91,17 @@ class IndexerService:
                 instance must be reused for build() and build_query() so that
                 the spell checker vocabulary is shared.
             config: Indexer configuration. Uses defaults if None.
+            chunker: Optional TextChunker. When provided, each document is split
+                into overlapping chunks before indexing. Each chunk is treated as
+                an independent document, so the resulting IndexedCorpus contains
+                chunk-level entries rather than full-document entries. The
+                original doc_id is stored in each chunk's metadata under the
+                key ``original_doc_id``. When None (default), documents are
+                indexed whole — preserving backwards compatibility.
         """
         self.text_processor = text_processor
         self.config = config or IndexerConfig()
+        self._chunker = chunker
 
     # ------------------------------------------------------------------
     # Indexation path
@@ -127,6 +137,16 @@ class IndexerService:
                 inverted_index={},
                 vocabulary=[],
             )
+
+        # Apply chunking before any further processing when a chunker is configured.
+        # Each chunk becomes an independent indexable unit; the original doc_id is
+        # preserved in chunk metadata so retrieval results can be traced back.
+        if self._chunker is not None:
+            chunked: list[Document] = []
+            for doc in documents:
+                chunked.extend(self._chunker.chunk(doc))
+            documents = chunked
+            logger.info("Chunking produced %d chunks from %d source documents", len(documents), len(documents))
 
         kept_documents: list[Document] = []
         kept_processed_texts: list[str] = []
