@@ -214,3 +214,94 @@ class TestParagraphChunker:
             last_para_chunk0 = chunks[0].text.split("\n\n")[-1].strip()
             first_para_chunk1 = chunks[1].text.split("\n\n")[0].strip()
             assert last_para_chunk0 == first_para_chunk1
+
+
+_st_available = pytest.mark.skipif(
+    __import__("importlib").util.find_spec("sentence_transformers") is None,
+    reason="sentence-transformers not installed",
+)
+
+
+@_st_available
+class TestSemanticChunker:
+    """Tests for strategy='semantic'. Require sentence-transformers."""
+
+    def test_semantic_strategy_accepted(self):
+        chunker = TextChunker(strategy="semantic")
+        assert chunker._strategy == "semantic"
+
+    def test_returns_list_of_documents(self):
+        chunker = TextChunker(strategy="semantic", similarity_threshold=0.5)
+        doc = _make_doc(
+            "La hipertensión arterial es una enfermedad crónica. "
+            "El tratamiento incluye medicamentos antihipertensivos. "
+            "La diabetes mellitus afecta el metabolismo de la glucosa. "
+            "Los pacientes diabéticos deben controlar su dieta."
+        )
+        chunks = chunker.chunk(doc)
+        assert isinstance(chunks, list)
+        assert all(hasattr(c, "doc_id") for c in chunks)
+        assert len(chunks) >= 1
+
+    def test_chunk_strategy_metadata_is_semantic(self):
+        chunker = TextChunker(strategy="semantic", similarity_threshold=0.9)
+        doc = _make_doc(
+            "La hipertensión es presión alta. "
+            "La diabetes afecta la glucosa. "
+            "El cáncer es una enfermedad oncológica."
+        )
+        chunks = chunker.chunk(doc)
+        for chunk in chunks:
+            assert chunk.metadata["chunk_strategy"] == "semantic"
+
+    def test_original_doc_id_preserved(self):
+        chunker = TextChunker(strategy="semantic", similarity_threshold=0.5)
+        doc = _make_doc(
+            "La hipertensión arterial requiere tratamiento. "
+            "La diabetes mellitus afecta la glucosa.",
+            doc_id="med_art_42",
+        )
+        chunks = chunker.chunk(doc)
+        for chunk in chunks:
+            assert chunk.metadata["original_doc_id"] == "med_art_42"
+
+    def test_url_preserved(self):
+        chunker = TextChunker(strategy="semantic", similarity_threshold=0.5)
+        doc = _make_doc(
+            "La hipertensión arterial es común. La diabetes afecta millones."
+        )
+        doc.url = "http://health.example/article"
+        chunks = chunker.chunk(doc)
+        for chunk in chunks:
+            assert chunk.url == doc.url
+
+    def test_topic_change_produces_multiple_chunks(self):
+        """Very low threshold should split on almost every boundary."""
+        chunker = TextChunker(strategy="semantic", similarity_threshold=0.99)
+        doc = _make_doc(
+            "La hipertensión arterial causa problemas cardiovasculares graves. "
+            "La diabetes mellitus tipo dos afecta la glucosa en sangre. "
+            "El cáncer de colon requiere colonoscopía de detección temprana."
+        )
+        chunks = chunker.chunk(doc)
+        assert len(chunks) >= 2
+
+    def test_high_threshold_keeps_similar_sentences_together(self):
+        """Very high threshold should always split — even similar sentences exceed it."""
+        chunker = TextChunker(strategy="semantic", similarity_threshold=0.0)
+        doc = _make_doc(
+            "La presión arterial alta es la hipertensión. "
+            "La hipertensión arterial eleva la presión sanguínea."
+        )
+        chunks = chunker.chunk(doc)
+        # threshold=0 means sim(a,b) >= 0 always → no split → 1 chunk
+        assert len(chunks) == 1
+
+    def test_single_sentence_falls_back_to_fixed(self):
+        """A single-sentence doc cannot be split semantically; fixed fallback applies."""
+        chunker = TextChunker(chunk_size=5, overlap=1, strategy="semantic")
+        doc = _make_doc("La hipertensión es presión alta en las arterias.")
+        chunks = chunker.chunk(doc)
+        assert len(chunks) >= 1
+        for chunk in chunks:
+            assert chunk.metadata["original_doc_id"] == doc.doc_id
