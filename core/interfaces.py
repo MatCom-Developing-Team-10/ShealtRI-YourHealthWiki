@@ -191,6 +191,42 @@ class BaseRetriever(ABC):
 
 
 # ---------------------------------------------------------------------------
+# Re-ranking strategy contract
+# ---------------------------------------------------------------------------
+
+
+class BaseRanker(ABC):
+    """Strategy interface for re-ranking retrieved documents before generation.
+
+    A re-ranker sits between the retriever and the RAG generator. It receives
+    the top-k documents returned by the retriever and reorders them so the
+    most relevant ones appear first in the LLM context window.
+
+    Implementations may use any signal: BM25 overlap, cross-encoder scores,
+    or hybrid combinations of lexical and semantic similarity.
+    """
+
+    @abstractmethod
+    def rerank(
+        self,
+        query: Query,
+        documents: list[RetrievedDocument],
+    ) -> list[RetrievedDocument]:
+        """Re-rank retrieved documents by relevance to the query.
+
+        Args:
+            query: The original user query (provides raw text for scoring).
+            documents: Documents returned by the retriever, in retriever order.
+
+        Returns:
+            The same documents reordered by descending combined relevance score.
+            Scores on each RetrievedDocument may be updated to reflect the new
+            ranking signal.
+        """
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
 # RAG generation strategy contract
 # ---------------------------------------------------------------------------
 

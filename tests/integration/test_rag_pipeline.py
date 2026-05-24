@@ -7,7 +7,9 @@ from core.models import (
     UserProfile,
     UserProfileType,
 )
+from modules.rag.evaluator import RAGEvaluator
 from modules.rag.service import RAGService
+from modules.ranker.service import HybridRanker
 
 
 class TestRAGWithoutLLM:
@@ -156,3 +158,78 @@ class TestRAGWithoutLLM:
         assert len(response.sources) <= 2
         assert response.sources[0].document.doc_id == "d0"
         assert response.sources[1].document.doc_id == "d1"
+
+
+class TestRAGWithHybridRanker:
+    """Integration tests for the re-ranking step wired into RAGService."""
+
+    def _make_docs(self) -> list[RetrievedDocument]:
+        return [
+            RetrievedDocument(
+                document=Document(
+                    doc_id="d_high_lsi",
+                    text="diabetes mellitus glucosa insulina páncreas",
+                    url="http://example.com/diabetes",
+                    metadata={"title": "Diabetes"},
+                ),
+                score=0.95,
+            ),
+            RetrievedDocument(
+                document=Document(
+                    doc_id="d_keyword_match",
+                    text="hipertensión arterial presión alta síntomas tratamiento",
+                    url="http://example.com/hypertension",
+                    metadata={"title": "Hipertensión"},
+                ),
+                score=0.55,
+            ),
+            RetrievedDocument(
+                document=Document(
+                    doc_id="d_low",
+                    text="cáncer oncología tumor células malignas",
+                    url="http://example.com/cancer",
+                    metadata={"title": "Cáncer"},
+                ),
+                score=0.30,
+            ),
+        ]
+
+    def test_rag_with_ranker_produces_valid_response(self):
+        """RAG with ranker wired in should still produce a valid response."""
+        ranker = HybridRanker()
+        rag = RAGService(api_key=None, ranker=ranker)
+        query = Query(text="hipertensión arterial presión")
+        response = rag.generate(query, self._make_docs())
+        assert response.answer is not None
+        assert len(response.answer) > 0
+        assert response.used_llm is False
+
+    def test_ranker_changes_source_order(self):
+        """Sources in response should reflect re-ranked order, not original LSI order."""
+        ranker = HybridRanker()
+        rag = RAGService(api_key=None, ranker=ranker, max_context_docs=3)
+        query = Query(text="hipertensión arterial presión")
+        response = rag.generate(query, self._make_docs())
+        # The keyword-matching doc should now be ranked above the high-LSI non-matching one
+        source_ids = [s.document.doc_id for s in response.sources]
+        assert source_ids[0] == "d_keyword_match"
+
+    def test_rag_without_ranker_preserves_original_order(self):
+        """Without a ranker, sources should preserve the retriever order."""
+        rag = RAGService(api_key=None, ranker=None, max_context_docs=3)
+        query = Query(text="hipertensión arterial presión")
+        response = rag.generate(query, self._make_docs())
+        assert response.sources[0].document.doc_id == "d_high_lsi"
+
+    def test_evaluator_with_ranked_response(self):
+        """Evaluator should work on the output of a re-ranked RAG response."""
+        ranker = HybridRanker()
+        rag = RAGService(api_key=None, ranker=ranker)
+        evaluator = RAGEvaluator()
+        query = Query(text="hipertensión arterial presión")
+        response = rag.generate(query, self._make_docs())
+        metrics = evaluator.evaluate(query, response.answer, response.sources)
+        assert "faithfulness" in metrics
+        assert "context_relevance" in metrics
+        assert 0.0 <= metrics["faithfulness"] <= 1.0
+        assert 0.0 <= metrics["context_relevance"] <= 1.0

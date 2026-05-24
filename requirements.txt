@@ -35,3 +35,6 @@ pypdf>=3.17.0                # PDF loading for digital books corpus
 # Utilities
 python-dateutil>=2.8.0
 pydantic>=2.0.0
+
+# Ranking & retrieval (Corte 3)
+rank-bm25>=0.2.2             # BM25 scoring for hybrid re-ranking
