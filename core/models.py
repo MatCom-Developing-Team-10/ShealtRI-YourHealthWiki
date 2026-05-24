@@ -80,6 +80,26 @@ class RetrievedDocument:
 
 
 @dataclass(slots=True)
+class PipelineContext:
+    """Mutable context object passed between pipeline stages and plugins.
+
+    The pipeline (or any orchestrator) creates a context, hands it to each
+    pre_retrieval plugin, calls the retriever, hands it to each
+    post_retrieval / post_ranking plugin, and returns ``results`` at the end.
+
+    Plugins should mutate the context in place (or return a new instance);
+    by convention they leave a breadcrumb under ``metadata[plugin_name]``
+    so debugging the pipeline does not require reading every plugin's source.
+
+    Attributes:
+        query: The user query with ``indexed_corpus`` populated by the indexer.
+        results: Documents produced by the retriever (empty before retrieval).
+        metadata: Free-form storage used by plugins to record what they did.
+    """
+
+    query: Query
+    results: list[RetrievedDocument] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 class RAGResponse:
     """Encapsulates a generated answer and its provenance.
 

@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from core.models import Query, Document, RetrievedDocument, RAGResponse
+from core.models import Query, Document, RetrievedDocument, RAGResponse, PipelineContext
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +191,36 @@ class BaseRetriever(ABC):
 
 
 # ---------------------------------------------------------------------------
+# Microkernel: plugin contract for optional pipeline extensions
+# ---------------------------------------------------------------------------
+
+
+class Plugin(ABC):
+    """Contract for optional pipeline extensions.
+
+    Plugins enrich the pipeline at well-known hook points without modifying
+    the core. The orchestrator iterates over registered plugins whose
+    ``hook_name()`` matches the current stage and calls ``execute(context)``
+    on each.
+
+    Convention for hook names:
+        ``pre_retrieval``  — runs before the retriever (may mutate the query)
+        ``post_retrieval`` — runs after the retriever (may filter / enrich results)
+        ``post_ranking``   — runs after ranking (may re-order or annotate)
+
+    A plugin must be pure with respect to its inputs: given the same
+    ``PipelineContext`` it should produce the same modifications, so that
+    the pipeline remains reproducible.
+    """
+
+    @abstractmethod
+    def hook_name(self) -> str:
+        """Return the hook name this plugin is wired to."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def execute(self, context: PipelineContext) -> PipelineContext:
+        """Apply the plugin's logic and return the modified context."""
 # RAG generation strategy contract
 # ---------------------------------------------------------------------------
 
