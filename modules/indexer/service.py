@@ -56,7 +56,7 @@ class IndexerConfig:
     """
 
     min_document_length: int = 1
-    min_term_frequency: int = 1
+    min_term_frequency: int = 2
     log_progress_every: int = 100
 
 

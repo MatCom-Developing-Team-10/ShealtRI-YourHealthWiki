@@ -37,8 +37,7 @@ EXPOSE 8501
 
 # Health check (optional but recommended)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8501')" || exit 1
+    CMD python -c "import requests; requests.get('http://localhost:8501/api/profiles')" || exit 1
 
-# Default command: console interface (Corte 1-2)
-# Switch to streamlit in Corte 3: CMD ["streamlit", "run", "ui/app.py", ...]
-CMD ["python", "cli.py"]
+# FastAPI + Uvicorn server (Corte 3)
+CMD ["uvicorn", "ui.app:app", "--host", "0.0.0.0", "--port", "8501"]

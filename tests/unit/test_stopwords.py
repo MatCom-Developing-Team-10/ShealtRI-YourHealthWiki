@@ -7,10 +7,11 @@ medical abbreviation accidentally being added as a stopword).
 
 from __future__ import annotations
 
-from modules.text_processor.stopwords import (
+from core.stopwords import (
     ADDITIONAL_SPANISH_STOPWORDS,
-    MEDICAL_ABBREVIATIONS,
+    SPANISH_MEDICAL_ABBREVIATIONS,
     SPANISH_MEDICAL_STOPWORDS,
+    MEDICAL_ABBREVIATIONS,
 )
 
 
@@ -37,7 +38,7 @@ class TestStopwordsContent:
 
     def test_no_overlap_with_medical_abbreviations(self):
         # If a stopword and a medical abbreviation overlap, retrieval breaks.
-        overlap = ADDITIONAL_SPANISH_STOPWORDS & MEDICAL_ABBREVIATIONS
+        overlap = ADDITIONAL_SPANISH_STOPWORDS & SPANISH_MEDICAL_ABBREVIATIONS
         assert overlap == set(), f"overlap: {overlap}"
 
 
@@ -56,4 +57,4 @@ class TestMedicalAbbreviations:
 
     def test_no_empty_strings(self):
         assert "" not in ADDITIONAL_SPANISH_STOPWORDS
-        assert "" not in MEDICAL_ABBREVIATIONS
+        assert "" not in SPANISH_MEDICAL_ABBREVIATIONS
