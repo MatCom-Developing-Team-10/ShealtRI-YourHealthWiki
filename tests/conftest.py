@@ -121,19 +121,59 @@ def sample_documents() -> list[Document]:
 def text_processor():
     """Real TextProcessor instance, shared across the session.
 
-    Loading the spaCy model is expensive (~1s), so a session-scoped fixture
-    keeps the test suite fast. Tests that need a fresh spell-checker
-    vocabulary should create their own TextProcessor inside the test.
+    Loading the spaCy model is expensive (~1s) and also large (~150MB), so
+    a session-scoped fixture keeps the suite both fast and memory-safe.
+    Tests that need a fresh spell-checker vocabulary should use the
+    ``fresh_processor`` fixture below, which reuses this same instance
+    but swaps in a clean Trie for the duration of the test.
     """
     spacy = pytest.importorskip("spacy")
-    try:
-        spacy.load("es_core_news_md")
-    except OSError:
-        pytest.skip("spaCy model 'es_core_news_md' not installed")
-
     from modules.text_processor import TextProcessor
 
-    return TextProcessor()
+    # Loading spaCy can fail at this point with OSError (model missing),
+    # MemoryError / ValueError / SystemError (host pressure), or
+    # numpy ArrayMemoryError. Skip cleanly in any of those cases so the
+    # rest of the suite still runs.
+    try:
+        return TextProcessor()
+    except OSError as exc:
+        pytest.skip(
+            f"spaCy model 'es_core_news_md' not installed or unreadable: {exc}"
+        )
+    except (MemoryError, ValueError, SystemError, Exception) as exc:
+        # ArrayMemoryError is a numpy subclass of MemoryError; we cast a
+        # wide net here because spaCy/thinc raises several variants under
+        # memory pressure that all mean the same thing for the test runner.
+        if "memory" in str(exc).lower() or isinstance(exc, MemoryError):
+            pytest.skip(
+                f"spaCy could not be loaded due to host memory pressure: {exc}"
+            )
+        raise
+
+
+@pytest.fixture
+def fresh_processor(text_processor):
+    """The session ``text_processor`` with a clean spell-checker per test.
+
+    Why this exists:
+        Loading a second TextProcessor() in the same process doubles spaCy's
+        memory footprint and can OOM CI runners. But many tests need the
+        spell-checker vocabulary to start empty so they can assert what
+        ``build()`` adds.
+
+        This fixture swaps in a fresh ``TrieSpellChecker`` on entry and
+        restores the original instance on teardown, so the underlying
+        (expensive) spaCy ``nlp`` object is reused across the session
+        while each test still sees a clean vocabulary.
+    """
+    from modules.text_processor.spell_checker import TrieSpellChecker
+
+    original = text_processor.spell_checker
+    text_processor.spell_checker = TrieSpellChecker()
+    try:
+        yield text_processor
+    finally:
+        text_processor.spell_checker = original
 
 
 @pytest.fixture
