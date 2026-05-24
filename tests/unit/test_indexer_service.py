@@ -92,14 +92,16 @@ class TestBuild:
         assert doc_indices == {0, 1}
 
     def test_term_frequency_counted(self):
-        idx = IndexerService(text_processor=_FakeTextProcessor())
+        cfg = IndexerConfig(min_term_frequency=1)
+        idx = IndexerService(text_processor=_FakeTextProcessor(), config=cfg)
         out = idx.build([_doc("d1", "asma asma asma diabetes")])
         # 'asma' appears 3 times in doc 0
         assert out.inverted_index["asma"] == [(0, 3)]
         assert out.inverted_index["diabetes"] == [(0, 1)]
 
     def test_vocabulary_is_sorted(self):
-        idx = IndexerService(text_processor=_FakeTextProcessor())
+        cfg = IndexerConfig(min_term_frequency=1)
+        idx = IndexerService(text_processor=_FakeTextProcessor(), config=cfg)
         out = idx.build(
             [_doc("d1", "zeta beta alpha"), _doc("d2", "delta gamma")]
         )
@@ -195,7 +197,8 @@ class TestRemove:
 
 class TestStats:
     def test_basic_counts(self):
-        idx = IndexerService(text_processor=_FakeTextProcessor())
+        cfg = IndexerConfig(min_term_frequency=1)
+        idx = IndexerService(text_processor=_FakeTextProcessor(), config=cfg)
         corpus = idx.build([_doc("d1", "a b c"), _doc("d2", "b c d")])
         stats = IndexerService.stats(corpus)
         assert stats["n_documents"] == 2
