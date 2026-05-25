@@ -11,11 +11,11 @@
 | Métrica | Valor |
 |---|---|
 | Módulos analizados | 10 paquetes (core + 5 modules + infra + 3 scrapers) |
-| Tests implementados | **22 archivos** en `tests/unit/` y `tests/integration/` |
-| Casos de prueba | **192** (190 ejecutados + 2 skipped por dependencias opcionales) |
-| Estado | **190 pass, 0 fail, 2 skip** |
-| Cobertura global | **79%** (líneas) |
-| Tiempo de ejecución | ~37 s en una máquina local |
+| Tests implementados | **29 archivos** en `tests/unit/`, `tests/integration/` y `tests/regression/` |
+| Casos de prueba | **260** (253 pass + 5 skip + 2 xfail) |
+| Estado | **253 pass, 0 fail, 5 skip, 2 xfail (bugs documentados)** |
+| Cobertura global | **79%** (líneas; 1152/1453) |
+| Tiempo de ejecución | ~53 s en una máquina local |
 | Bugs reales detectados | **3** (uno demostrado por test) |
 | Defectos no bloqueantes | **6** |
 
@@ -154,8 +154,10 @@ A continuación se documenta lo encontrado en cada módulo, separando lo que fun
 
 ```
 tests/
-├── conftest.py                              # fakes + fixtures + sys.path
-├── unit/
+├── _synthetic_corpus.py                          # 20 docs médicos sintéticos en español
+├── conftest.py                                   # fakes + fixtures + sys.path
+├── smoke_test.py                                 # unittest stand-alone (no deps)
+├── unit/                                         # 22 archivos — comportamiento por módulo
 │   ├── test_core_models.py
 │   ├── test_core_interfaces.py
 │   ├── test_pipeline.py
@@ -177,10 +179,23 @@ tests/
 │   ├── test_scrapers_medlineplus.py
 │   ├── test_scrapers_nhs.py
 │   ├── test_infra_storage.py
-│   ├── test_chroma_repository.py            # importorskip
-│   └── test_document_loader.py              # importorskip
-└── integration/
-    └── test_indexing_to_retrieval.py        # E2E con spaCy real
+│   ├── test_chroma_repository.py                 # importorskip(chromadb)
+│   └── test_document_loader.py                   # importorskip(langchain)
+├── integration/                                  # 6 archivos — flujos cruzando módulos
+│   ├── test_pipeline.py                          # E2E real con ChromaDB (importorskip)
+│   ├── test_indexing_to_retrieval.py             # E2E con fakes in-memory
+│   ├── test_crawler_to_storage.py                # crawler → JSONL → re-lectura
+│   ├── test_indexer_text_processor.py            # spell vocab compartido entre módulos
+│   ├── test_incremental_indexation.py            # update/remove/stats con spaCy real
+│   ├── test_persistence_round_trip.py            # save → reload → misma query
+│   └── test_retrieval_semantic_relevance.py      # 20 queries paramétricas top-5
+└── regression/                                   # 6 archivos — lock-down y bugs conocidos
+    ├── test_known_bugs.py                        # xfail strict para bugs #3, #4
+    ├── test_ranking_golden.py                    # top-1 esperado por query
+    ├── test_idf_golden.py                        # pesos IDF golden
+    ├── test_artifact_format.py                   # formato on-disk de cada artefacto
+    ├── test_stopwords_lockdown.py                # tamaño + membership snapshots
+    └── test_doc_id_stability.py                  # UUID5(URL) golden
 ```
 
 ### 5.2 Estrategia de aislamiento
@@ -245,14 +260,103 @@ python -m pytest tests/ -n auto
 ### 5.5 Resultado de la última ejecución
 
 ```
-======================= 190 passed, 2 skipped in 37.38s =======================
+=== 253 passed, 5 skipped, 2 xfailed in 53.63s ===
 ```
 
-Skipped: `tests/unit/test_chroma_repository.py` y `tests/unit/test_document_loader.py`, que dependen de `chromadb` y `langchain_community` — ambos opcionales en este corte.
+Skipped (5):
+
+- `tests/unit/test_chroma_repository.py` y `tests/integration/test_pipeline.py` — requieren `chromadb` (no instalado).
+- `tests/unit/test_document_loader.py` — requiere `langchain_community` (no instalado).
+- 2 tests de `tests/unit/test_text_processor.py` — fueron saltados con un mensaje claro cuando spaCy no pudo cargarse por segunda vez por presión de memoria del host.
+
+Xfailed (2): bugs documentados en `tests/regression/test_known_bugs.py` que el día que se corrijan harán XPASS y exigirán retirar el marker.
 
 ---
 
-## 6. Hallazgos consolidados (lista de acción)
+## 6. Tests de integración (6 archivos, ~25 casos)
+
+Los tests de integración cruzan la frontera entre módulos. Cada uno ejercita un flujo real del sistema con dependencias reales (spaCy, filesystem), pero aísla los servicios externos pesados con fakes definidos en `conftest.py`.
+
+### 6.1 Fixtures compartidas (`tests/conftest.py`)
+
+| Fixture | Scope | Por qué existe |
+|---|---|---|
+| `text_processor` | session | spaCy se carga **una sola vez** por corrida (~150 MB en RAM). |
+| `fresh_processor` | function | Reutiliza el spaCy de la session, pero **inyecta un `TrieSpellChecker` limpio** para que cada test parta de vocabulario vacío. Patrón clave para evitar OOM en hosts limitados. |
+| `in_memory_store` / `in_memory_repo` | function | Fakes de `DocumentStore` y `BaseRepository` que reemplazan ChromaDB en memoria con coseno puro Python. |
+| `sample_documents` | session | 20 documentos médicos sintéticos cargados desde `tests/_synthetic_corpus.py`. |
+| `tmp_chroma_dir` / `tmp_store_dir` | function | Directorios temporales aislados por test (vía `tmp_path`). |
+
+### 6.2 Inventario de tests de integración
+
+| Archivo | Qué cubre | Casos |
+|---|---|---|
+| `test_pipeline.py` | E2E real con `ChromaRepository` + `FileSystemDocumentStore`. Verifica que la query "hipertensión arterial" produce resultados, scores ∈ [0,1], y que `RetrievalContext` delega correctamente. | 9 |
+| `test_indexing_to_retrieval.py` | E2E con fakes in-memory. Topical query sobre el corpus de 20 docs surface el doc esperado. Spell correction recupera matches ante typos. | 2 |
+| `test_crawler_to_storage.py` | `BaseScraper → GenericCrawler → RawDocumentStorage`. HTTP mockeado. Verifica: doc_id UUID5 estable, 1 JSONL por source, append-no-overwrite, unicode preservado. | 4 |
+| `test_indexer_text_processor.py` | Contrato entre `TextProcessor` e `IndexerService`: `build()` puebla la vocabulary del Trie; `build_query()` la consulta para corregir typos; dos indexers que comparten processor comparten vocabulario. | 3 |
+| `test_incremental_indexation.py` | `update()` + `remove()` + `stats()` con spaCy real. Verifica que un doc añadido con términos novedosos extiende el vocabulario; que un doc removido suprime los términos exclusivos; que los índices se renumeran sin huecos. | 6 |
+| `test_persistence_round_trip.py` | `IndexStore.save → load`, `TfidfProcessor.save → load`, `LSIModel.save → load`, `spell_vocab.save → load`. Tras el reload la misma query produce el **mismo top-5** byte-a-byte. | 2 |
+| `test_retrieval_semantic_relevance.py` | 20 queries paramétricas (`@pytest.mark.parametrize`), una por tema del corpus. Cada query debe surface el doc canónico de ese tema en el top-5. Más: el score topical debe ser > el score sobre query "gibberish". | 22 |
+
+### 6.3 Decisiones de diseño relevantes
+
+- **Memoria controlada**: cargar dos `TextProcessor()` simultáneos provocaba OOM en el host de desarrollo. La fixture `fresh_processor` resuelve esto compartiendo el modelo spaCy pero clonando la lógica del spell checker — patrón replicado en todos los archivos pesados.
+- **Sin red**: el test de crawler usa `unittest.mock.patch` sobre la `requests.Session`. Tres respuestas mockeadas (sitemap + 3 artículos) ejercitan la cola completa, robots, batch flush y persistencia.
+- **Determinismo**: el corpus sintético (20 docs en español) es de tamaño suficiente para que LSI con `n_components=15` produzca rankings estables sin ser tan grande que enlentezca la suite. El módulo `tests/_synthetic_corpus.py` es la única fuente de verdad — `cli.py` lo reutiliza como corpus de fallback en local.
+
+---
+
+## 7. Tests de regresión (6 archivos, ~25 casos)
+
+Los tests de regresión existen para **bloquear cambios silenciosos** en comportamientos verificados. Combinan tres técnicas:
+
+### 7.1 Golden files
+
+Cada test comparable contra un valor recordado a mano. Cuando el valor cambia (intencionalmente o no) el test rompe y obliga a explicarse en el mismo commit.
+
+| Archivo | Qué se snapshotea | Cuándo actualizar |
+|---|---|---|
+| `test_ranking_golden.py` | Top-1 `doc_id` esperado para 5 queries sobre un mini-corpus determinista (5 docs) | Sólo si cambia deliberadamente el algoritmo de ranking. Actualizar la constante `GOLDEN_TOP_1` y mencionarlo en el commit. |
+| `test_idf_golden.py` | Pesos IDF exactos calculados a partir de la fórmula actual `log((N+1)/(df+1)) + 1` | Sólo si se cambia la fórmula de IDF (smoothing, base del logaritmo, etc.). |
+| `test_doc_id_stability.py` | 3 valores UUID5 golden para URLs reales de Mayo, MedlinePlus y NHS | **Nunca** sin coordinarse con el equipo — cambiar esto invalida todo índice existente. |
+| `test_artifact_format.py` | Llaves del joblib de TF-IDF (`{vocabulary, idf, n_docs}`), `schema_version == "1.0"` del manifest, presencia de cada archivo en `IndexStore`, JSON shape per doc, JSONL shape por línea | Cuando se bumpea el `schema_version` (en ese caso, agregar test de migración en el mismo commit). |
+| `test_stopwords_lockdown.py` | Tamaño de cada set (`±3` de tolerancia) y membership obligatorio de términos médicos críticos | Al añadir/quitar stopwords intencionalmente. Actualizar `SNAPSHOT_SIZES`. |
+
+### 7.2 `xfail strict` para bugs conocidos
+
+`tests/regression/test_known_bugs.py` contiene un test por cada bug del informe que **aún no está arreglado**:
+
+```python
+@pytest.mark.xfail(strict=True, reason="Bug #3 in docs/informe-tecnico-tests-corte1.md: ...")
+def test_lsi_model_handles_single_document_corpus():
+    ...
+```
+
+Comportamiento:
+
+- Mientras el bug exista, el test falla → pytest lo reporta como **XFAIL** → la suite global sigue verde.
+- El día que alguien arregle el bug, el test pasa → `strict=True` convierte ese XPASS en **FAILED**.
+- Eso fuerza al committer a borrar el `xfail` marker en el mismo commit que arregla el bug. El backlog se autogestiona.
+
+Cubre actualmente:
+
+- **Bug #3**: `LSIModel.fit()` con corpus de 1 documento.
+- **Bug #4**: importar `modules.indexer` carga spaCy transitivamente. El test ejecuta `import modules.indexer` **en un subprocess** con un `MetaPathFinder` que bloquea spaCy — esto evita contaminar el `sys.modules` del proceso de pytest principal.
+
+### 7.3 Invariantes cruzados
+
+- `test_stopwords_lockdown.py::test_no_overlap_between_stopwords_and_medical_abbreviations`: el solapamiento entre stopwords y abreviaturas médicas haría que la indexación dropeara silenciosamente términos críticos como `hta`. Test crítico de configuración.
+- `test_stopwords_lockdown.py::test_medical_terms_are_NOT_stopwords`: 12 términos hand-curated (`paciente`, `síntoma`, `agudo`, etc.) que **deben** sobrevivir el preprocesamiento. Si alguien los añade por error a stopwords, este test lo atrapa.
+- `test_ranking_golden.py::test_score_monotonicity_for_repeated_terms`: query más larga con términos on-topic NO debe perder score. Protege contra bugs de normalización IDF.
+
+### 7.4 Cómo evolucionan estos tests
+
+Los tests golden son archivos vivos: la convención del equipo debe ser "si cambias el algoritmo, actualiza el golden en el mismo commit, en el mismo PR, con una nota en el cuerpo del commit explicando por qué cambia". Eso convierte la regresión en una conversación explícita, no en un susto en producción.
+
+---
+
+## 8. Hallazgos consolidados (lista de acción)
 
 Ordenados por prioridad para el equipo:
 

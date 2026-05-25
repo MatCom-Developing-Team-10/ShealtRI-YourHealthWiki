@@ -11,6 +11,10 @@ from __future__ import annotations
 
 import pytest
 
+# ChromaDB is an optional dependency for this test. Skip the whole module if
+# it is not installed so the rest of the suite still collects and runs.
+pytest.importorskip("chromadb")
+
 from core.models import Document, Query
 from core.pipeline import RetrievalContext
 from infra.chroma_repository import ChromaRepository
