@@ -33,7 +33,7 @@ class LSIRetriever(BaseRetriever):
     """
 
     # Default similarity threshold - results below this score are filtered out
-    DEFAULT_SIMILARITY_THRESHOLD = 0.4
+    DEFAULT_SIMILARITY_THRESHOLD = 0.25
 
     def __init__(
         self,
@@ -52,7 +52,7 @@ class LSIRetriever(BaseRetriever):
             n_components: Number of latent LSI dimensions.
             similarity_threshold: Minimum similarity score (0-1) for results.
                 Results below this threshold are filtered out. If None, uses
-                DEFAULT_SIMILARITY_THRESHOLD (0.4).
+                DEFAULT_SIMILARITY_THRESHOLD (0.25).
         """
         self.repository = repository
         self.document_store = document_store

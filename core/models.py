@@ -3,10 +3,38 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from core.interfaces import IndexedCorpus
+
+
+class UserProfileType(Enum):
+    """Supported user profiles for profile-aware RAG responses."""
+
+    PATIENT = "paciente"
+    MEDICAL_STUDENT = "estudiante_medicina"
+    MEDICAL_PROFESSIONAL = "profesional_medico"
+    DIAGNOSTIC_ASSISTANT = "diagnostico_asistido"
+    NATURAL_MEDICINE = "medicina_natural"
+    CAREGIVER = "cuidador_familiar"
+
+
+@dataclass(slots=True)
+class UserProfile:
+    """Captures the user's role and communication preferences.
+
+    Attributes:
+        profile_type: Enum identifying the role.
+        name: Human-readable label shown in UI (Spanish).
+        custom_instructions: Optional free-text override appended to the
+            system prompt for per-user fine-tuning.
+    """
+
+    profile_type: UserProfileType
+    name: str
+    custom_instructions: str = ""
 
 
 @dataclass(slots=True)
@@ -18,11 +46,13 @@ class Query:
         indexed_corpus: Preprocessed query as IndexedCorpus for retrieval.
             Built by the pipeline before calling the retriever.
         metadata: Optional metadata associated with the query.
+        user_profile: User profile for profile-aware RAG responses.
     """
 
     text: str
     indexed_corpus: IndexedCorpus | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    user_profile: UserProfile | None = None
 
 
 @dataclass(slots=True)
@@ -47,3 +77,45 @@ class RetrievedDocument:
 
     document: Document
     score: float
+
+
+@dataclass(slots=True)
+class PipelineContext:
+    """Mutable context object passed between pipeline stages and plugins.
+
+    The pipeline (or any orchestrator) creates a context, hands it to each
+    pre_retrieval plugin, calls the retriever, hands it to each
+    post_retrieval / post_ranking plugin, and returns ``results`` at the end.
+
+    Plugins should mutate the context in place (or return a new instance);
+    by convention they leave a breadcrumb under ``metadata[plugin_name]``
+    so debugging the pipeline does not require reading every plugin's source.
+
+    Attributes:
+        query: The user query with ``indexed_corpus`` populated by the indexer.
+        results: Documents produced by the retriever (empty before retrieval).
+        metadata: Free-form storage used by plugins to record what they did.
+    """
+
+    query: Query
+    results: list[RetrievedDocument] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+class RAGResponse:
+    """Encapsulates a generated answer and its provenance.
+
+    Attributes:
+        answer: Generated text in Spanish, adapted to the user profile.
+        profile_type: The profile that shaped the generation.
+        sources: Documents used as context for generation.
+        used_llm: True if an LLM produced the answer; False if template fallback.
+        model_name: LLM model identifier (e.g. "llama-3.1-8b-instant"), or
+            "template_fallback" when the LLM was unavailable.
+        query_text: Original query text — stored for logging/display.
+    """
+
+    answer: str
+    profile_type: UserProfileType
+    sources: list[RetrievedDocument]
+    used_llm: bool
+    model_name: str
+    query_text: str

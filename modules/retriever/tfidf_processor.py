@@ -11,6 +11,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 from scipy.sparse import csr_matrix, spmatrix
+from sklearn.preprocessing import normalize
 
 from core.interfaces import IndexedCorpus
 
@@ -57,13 +58,14 @@ class TfidfProcessor:
             for doc_idx, tf in postings:
                 rows.append(doc_idx)
                 cols.append(term_idx)
-                data.append(tf * term_idf)
+                data.append(np.log1p(tf) * term_idf)
 
-        return csr_matrix(
+        matrix = csr_matrix(
             (data, (rows, cols)),
             shape=(self._n_docs, len(self._vocabulary)),
             dtype=np.float32,
         )
+        return normalize(matrix, norm="l2", axis=1)
 
     def transform(self, query_corpus: IndexedCorpus) -> spmatrix:
         """Transform query corpus to TF-IDF vector.
@@ -92,13 +94,14 @@ class TfidfProcessor:
                 tf = postings[0][1]  # (doc_idx, freq) -> freq
                 term_idx = self._term_to_idx[term]
                 indices.append(term_idx)
-                data.append(tf * self._idf[term_idx])
+                data.append(np.log1p(tf) * self._idf[term_idx])
 
-        return csr_matrix(
+        matrix = csr_matrix(
             (data, ([0] * len(data), indices)),
             shape=(1, len(self._vocabulary)),
             dtype=np.float32,
         )
+        return normalize(matrix, norm="l2", axis=1)
 
     @property
     def vocabulary(self) -> list[str]:

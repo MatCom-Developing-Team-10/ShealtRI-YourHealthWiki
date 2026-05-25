@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ShealtRI — Sistema de Recuperación de Información Médica</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- LEFT SIDEBAR: Navigation + Profile selector -->
+        <aside class="sidebar">
+            <nav class="sidebar-nav">
+                <div class="nav-item">
+                    <span class="nav-icon">📚</span>
+                    <span class="nav-label">Enciclopedia</span>
+                </div>
+                <div class="nav-item">
+                    <span class="nav-icon">📜</span>
+                    <span class="nav-label">Historial</span>
+                </div>
+                <div class="nav-item">
+                    <span class="nav-icon">📖</span>
+                    <span class="nav-label">Biblioteca</span>
+                </div>
+                <div class="nav-item">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-label">Ajustes</span>
+                </div>
+            </nav>
+
+            <div class="profile-selector">
+                <label class="profile-label">Selecciona tu perfil:</label>
+                <div id="profiles-container" class="profiles">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+        </aside>
+
+        <!-- CENTER: Search + Results -->
+        <main class="main-panel">
+            <div class="search-container">
+                <input
+                    type="text"
+                    id="search-input"
+                    class="search-input"
+                    placeholder="Busca condiciones, síntomas, medicamentos..."
+                    aria-label="Search medical information"
+                >
+                <button id="search-btn" class="search-btn">Buscar</button>
+            </div>
+
+            <div id="results-container" class="results-container">
+                <div class="results-placeholder">
+                    <p>Ingresa una consulta para comenzar</p>
+                </div>
+            </div>
+        </main>
+
+        <!-- RIGHT SIDEBAR: Avatar + RAG Response -->
+        <aside class="right-panel">
+            <div class="avatar-container">
+                <!-- Greetings video (play once on load) -->
+                <video
+                    id="avatar-greetings"
+                    class="avatar-video"
+                    playsinline
+                    muted
+                    style="display: none;"
+                >
+                    <source src="/static/videos/greetings.mp4" type="video/mp4">
+                </video>
+
+                <!-- Idle video (loop) -->
+                <video
+                    id="avatar-idle"
+                    class="avatar-video"
+                    playsinline
+                    muted
+                    autoplay
+                    loop
+                    style="display: none;"
+                >
+                    <source src="/static/videos/idle.mp4" type="video/mp4">
+                </video>
+
+                <!-- Responding video (loop) - randomly selected from 3 variants -->
+                <video
+                    id="avatar-responding"
+                    class="avatar-video"
+                    playsinline
+                    muted
+                    loop
+                    style="display: none;"
+                >
+                    <source src="/static/videos/responding.mp4" type="video/mp4">
+                </video>
+            </div>
+
+            <div id="rag-response" class="rag-response">
+                <p class="response-placeholder">La respuesta aparecerá aquí</p>
+            </div>
+        </aside>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
