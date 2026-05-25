@@ -17,7 +17,7 @@ import logging
 import os
 from typing import Any
 
-from core.interfaces import BaseRAG
+from core.interfaces import BaseRAG, BaseRanker
 from core.models import (
     Query,
     RAGResponse,
@@ -51,6 +51,7 @@ class RAGService(BaseRAG):
         api_key: str | None = None,
         model_name: str | None = None,
         max_context_docs: int = 3,
+        ranker: BaseRanker | None = None,
     ) -> None:
         """Initialize the RAG service.
 
@@ -63,6 +64,11 @@ class RAGService(BaseRAG):
                 "llama-3.1-8b-instant".
             max_context_docs: Number of retrieved documents to include
                 in the LLM context window.
+            ranker: Optional re-ranker. When provided, retrieved documents are
+                re-ranked by the ranker before the context block is built. This
+                implements the "Post-proceso (re-rank, filtros)" step from the
+                RAG pipeline described in the course lecture. When None, the
+                original retriever ordering is preserved (backwards-compatible).
         """
         self.api_key = api_key or os.environ.get("GROQ_API_KEY")
         self.model_name = (
@@ -71,6 +77,7 @@ class RAGService(BaseRAG):
             or "llama-3.1-8b-instant"
         )
         self.max_context_docs = max_context_docs
+        self._ranker = ranker
         self._client = None
 
         if self.api_key:
@@ -110,7 +117,16 @@ class RAGService(BaseRAG):
         profile = self._resolve_profile(query.user_profile)
         profile_config = ProfileRegistry.get(profile.profile_type)
 
-        context_block = build_context_block(retrieved_docs, max_docs=n_docs)
+        # Re-rank before building the context block when a ranker is wired in.
+        # This implements the "Post-proceso (re-rank, filtros)" step from the
+        # RAG online pipeline in the course lecture.
+        docs_for_context = (
+            self._ranker.rerank(query, retrieved_docs)
+            if self._ranker is not None
+            else retrieved_docs
+        )
+
+        context_block = build_context_block(docs_for_context, max_docs=n_docs)
         prompt = render_prompt(profile_config, query.text, context_block)
 
         answer, used_llm, model_used = self._call_llm(prompt)
@@ -123,7 +139,7 @@ class RAGService(BaseRAG):
         return RAGResponse(
             answer=answer,
             profile_type=profile.profile_type,
-            sources=retrieved_docs[:n_docs],
+            sources=docs_for_context[:n_docs],
             used_llm=used_llm,
             model_name=model_used,
             query_text=query.text,

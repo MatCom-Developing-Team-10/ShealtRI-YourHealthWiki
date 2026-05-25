@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from core.models import Query, Document, RetrievedDocument, RAGResponse, PipelineContext
+from core.models import Query, Document, RetrievedDocument, RAGResponse
 
 
 # ---------------------------------------------------------------------------
@@ -191,36 +191,42 @@ class BaseRetriever(ABC):
 
 
 # ---------------------------------------------------------------------------
-# Microkernel: plugin contract for optional pipeline extensions
+# Re-ranking strategy contract
 # ---------------------------------------------------------------------------
 
 
-class Plugin(ABC):
-    """Contract for optional pipeline extensions.
+class BaseRanker(ABC):
+    """Strategy interface for re-ranking retrieved documents before generation.
 
-    Plugins enrich the pipeline at well-known hook points without modifying
-    the core. The orchestrator iterates over registered plugins whose
-    ``hook_name()`` matches the current stage and calls ``execute(context)``
-    on each.
+    A re-ranker sits between the retriever and the RAG generator. It receives
+    the top-k documents returned by the retriever and reorders them so the
+    most relevant ones appear first in the LLM context window.
 
-    Convention for hook names:
-        ``pre_retrieval``  — runs before the retriever (may mutate the query)
-        ``post_retrieval`` — runs after the retriever (may filter / enrich results)
-        ``post_ranking``   — runs after ranking (may re-order or annotate)
-
-    A plugin must be pure with respect to its inputs: given the same
-    ``PipelineContext`` it should produce the same modifications, so that
-    the pipeline remains reproducible.
+    Implementations may use any signal: BM25 overlap, cross-encoder scores,
+    or hybrid combinations of lexical and semantic similarity.
     """
 
     @abstractmethod
-    def hook_name(self) -> str:
-        """Return the hook name this plugin is wired to."""
+    def rerank(
+        self,
+        query: Query,
+        documents: list[RetrievedDocument],
+    ) -> list[RetrievedDocument]:
+        """Re-rank retrieved documents by relevance to the query.
+
+        Args:
+            query: The original user query (provides raw text for scoring).
+            documents: Documents returned by the retriever, in retriever order.
+
+        Returns:
+            The same documents reordered by descending combined relevance score.
+            Scores on each RetrievedDocument may be updated to reflect the new
+            ranking signal.
+        """
         raise NotImplementedError
 
-    @abstractmethod
-    def execute(self, context: PipelineContext) -> PipelineContext:
-        """Apply the plugin's logic and return the modified context."""
+
+# ---------------------------------------------------------------------------
 # RAG generation strategy contract
 # ---------------------------------------------------------------------------
 
