@@ -209,6 +209,8 @@ __marimo__/
 # ShealtRI — generated at runtime, not tracked
 data/raw/
 !data/raw/.gitkeep
+data/pdfs/
+!data/pdfs/.gitkeep
 data/chroma/
 !data/chroma/.gitkeep
 data/documents/

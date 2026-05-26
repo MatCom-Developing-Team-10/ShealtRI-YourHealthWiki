@@ -101,19 +101,22 @@ def _load_from_raw_dir() -> list[Document] | None:
         except (json.JSONDecodeError, KeyError):
             continue
 
-    # PDF, TXT, JSON, CSV, Markdown — via DocumentLoader
-    supported_extensions = {".pdf", ".txt", ".json", ".csv", ".md"}
-    non_jsonl_files = [
+    # JSON, TXT, CSV, Markdown — via DocumentLoader, loaded file by file.
+    # PDFs are intentionally excluded: they are pre-extracted to JSON by
+    # scripts/ingest_pdfs.py, so the app loads the cheap JSON and never
+    # re-parses a PDF here (even if a .pdf is left in data/raw/).
+    supported_extensions = {".txt", ".json", ".csv", ".md"}
+    other_files = [
         f for f in _RAW_DIR.rglob("*")
-        if f.is_file() and f.suffix in supported_extensions
+        if f.is_file() and f.suffix.lower() in supported_extensions
     ]
-    if non_jsonl_files:
+    if other_files:
         loader = DocumentLoader()
-        try:
-            loaded = loader.load_from_directory(_RAW_DIR)
-            documents.extend(loaded)
-        except DocumentLoaderError as e:
-            print(f"  [warn] DocumentLoader: {e}", file=sys.stderr)
+        for file_path in other_files:
+            try:
+                documents.extend(loader.load_from_file(file_path))
+            except DocumentLoaderError as e:
+                print(f"  [warn] DocumentLoader ({file_path.name}): {e}", file=sys.stderr)
 
     return documents if documents else None
 

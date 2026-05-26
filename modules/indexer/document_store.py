@@ -103,7 +103,9 @@ class FileSystemDocumentStore(DocumentStore):
                     "metadata": doc.metadata,
                 }
                 with open(doc_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
+                    # Compact (no indentation): smaller files and faster
+                    # serialization when persisting thousands of documents.
+                    json.dump(data, f, ensure_ascii=False)
             except TypeError as e:
                 # Non-serializable data in metadata
                 logger.error(
