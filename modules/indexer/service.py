@@ -15,8 +15,10 @@ Responsibilities:
           checker vocabulary.
 
 Flow contracts:
-    - TextProcessor.process(text, is_query=False) must be called for documents so
-      that their tokens populate the Trie used to correct later queries.
+    - Documents are preprocessed with is_query=False so their tokens populate
+      the Trie used to correct later queries. build()/update() use the batched
+      TextProcessor.process_many() for throughput; the contract is identical to
+      calling process() per document.
     - TextProcessor.process(text, is_query=True) must be called for queries so
       that OOV tokens are rewritten to the closest known vocabulary term.
     - The returned IndexedCorpus satisfies its `documents`/`processed_texts`
@@ -153,8 +155,15 @@ class IndexerService:
         per_doc_tf: list[Counter[str]] = []
 
         total = len(documents)
-        for position, doc in enumerate(documents, start=1):
-            processed = self.text_processor.process(doc.text, is_query=False)
+        logger.info("Preprocessing %d documents (batched)", total)
+
+        # Single batched spaCy pass over the whole collection — far cheaper than
+        # one process() call per document. Output aligns 1:1 with `documents`.
+        processed_texts = self.text_processor.process_many(
+            [doc.text for doc in documents], is_query=False
+        )
+
+        for doc, processed in zip(documents, processed_texts):
             tokens = processed.split() if processed else []
 
             if len(tokens) < self.config.min_document_length:
@@ -167,9 +176,6 @@ class IndexerService:
             kept_documents.append(doc)
             kept_processed_texts.append(processed)
             per_doc_tf.append(Counter(tokens))
-
-            if position % self.config.log_progress_every == 0:
-                logger.info("Indexed %d/%d documents", position, total)
 
         inverted_index, vocabulary = self._aggregate_postings(per_doc_tf)
 
@@ -231,16 +237,25 @@ class IndexerService:
             term: list(postings) for term, postings in existing.inverted_index.items()
         }
 
-        added = 0
+        # Drop duplicates up front — both IDs already present and repeats within
+        # this batch — so the expensive preprocessing only runs on real additions.
+        seen_ids = set(existing_ids)
+        candidates: list[Document] = []
         skipped_duplicate = 0
-        skipped_short = 0
-
-        for position, doc in enumerate(new_documents, start=1):
-            if doc.doc_id in existing_ids:
+        for doc in new_documents:
+            if doc.doc_id in seen_ids:
                 skipped_duplicate += 1
                 continue
+            seen_ids.add(doc.doc_id)
+            candidates.append(doc)
 
-            processed = self.text_processor.process(doc.text, is_query=False)
+        processed_texts = self.text_processor.process_many(
+            [doc.text for doc in candidates], is_query=False
+        )
+
+        added = 0
+        skipped_short = 0
+        for doc, processed in zip(candidates, processed_texts):
             tokens = processed.split() if processed else []
 
             if len(tokens) < self.config.min_document_length:
@@ -250,17 +265,11 @@ class IndexerService:
             new_doc_idx = len(kept_documents)
             kept_documents.append(doc)
             kept_processed_texts.append(processed)
-            existing_ids.add(doc.doc_id)
 
             for term, tf in Counter(tokens).items():
                 inverted_index.setdefault(term, []).append((new_doc_idx, tf))
 
             added += 1
-
-            if position % self.config.log_progress_every == 0:
-                logger.info(
-                    "update: processed %d/%d candidates", position, len(new_documents),
-                )
 
         vocabulary = sorted(inverted_index.keys())
 

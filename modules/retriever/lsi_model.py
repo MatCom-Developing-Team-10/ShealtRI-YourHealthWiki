@@ -40,10 +40,14 @@ class LSIModel:
             random_state: Seed for reproducibility.
         """
         self.n_components = n_components
+        # n_iter=7 balances randomized-SVD accuracy and speed: for TF-IDF
+        # matrices the spectrum decays quickly, so 7 power iterations match the
+        # quality of higher counts while running noticeably faster.
+        self._n_iter = 7
         self._svd = TruncatedSVD(
             n_components=n_components,
             algorithm="randomized",
-            n_iter=10,
+            n_iter=self._n_iter,
             random_state=random_state,
         )
         self._fitted = False
@@ -82,7 +86,7 @@ class LSIModel:
             self._svd = TruncatedSVD(
                 n_components=effective_k,
                 algorithm="randomized",
-                n_iter=10,
+                n_iter=self._n_iter,
                 random_state=self._svd.random_state,
             )
             self.n_components = effective_k
