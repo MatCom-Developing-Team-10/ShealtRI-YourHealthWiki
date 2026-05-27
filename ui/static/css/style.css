@@ -3,7 +3,7 @@
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 :root {
-    --color-bg: #f5f7fa;
+    --color-bg: #f5f7fb;
     --color-bg-dark: #ffffff;
     --color-text: #1a1a1a;
     --color-text-muted: #666666;
@@ -49,8 +49,8 @@ body {
 }
 
 .sidebar {
-    background-color: var(--color-bg-dark);
-    border-right: 1px solid var(--color-border);
+    background-color: #ffffff;
+    border-right: 1px solid #ffffff;
     padding: 24px 16px;
     overflow-y: auto;
     display: flex;
@@ -68,13 +68,12 @@ body {
 }
 
 .right-panel {
-    background-color: var(--color-bg-dark);
-    border-left: 1px solid var(--color-border);
+    background-color: var(--color-bg);
     padding: 24px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 0;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
@@ -136,28 +135,62 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 12px;
-    border-radius: var(--border-radius);
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid #e0e0e0;
+    background-color: #ffffff;
     cursor: pointer;
     font-size: 13px;
-    color: var(--color-text);
-    transition: background-color 0.2s ease;
+    color: #999999;
+    transition: all 0.2s ease;
     user-select: none;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+    position: relative;
 }
 
 .profile-option:hover {
-    background-color: rgba(0, 102, 204, 0.08);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.12);
+}
+
+.profile-icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #999999;
+}
+
+.profile-icon svg {
+    width: 100%;
+    height: 100%;
+    stroke: currentColor;
 }
 
 .profile-option input[type="radio"] {
-    cursor: pointer;
-    accent-color: var(--color-primary);
+    display: none;
 }
 
 .profile-option.selected {
-    background-color: rgba(0, 102, 204, 0.1);
-    color: var(--color-primary);
+    background-color: #ffffff;
+    border-color: #e0e0e0;
+    color: #001a4d;
     font-weight: 600;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.12);
+}
+
+.profile-option.selected .profile-icon {
+    color: #001a4d;
+}
+
+.profile-option.selected::after {
+    content: '✓';
+    position: absolute;
+    right: 12px;
+    color: #001a4d;
+    font-weight: 700;
+    font-size: 14px;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
@@ -166,42 +199,54 @@ body {
 
 .search-container {
     display: flex;
-    gap: 8px;
+    align-items: center;
+    gap: 12px;
+    padding: 0 16px;
     margin-bottom: 8px;
+    background-color: var(--color-bg-dark);
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    transition: box-shadow 0.2s ease, border-color 0.2s ease;
+    overflow: visible;
+}
+
+.search-container:focus-within {
+    box-shadow: 0 4px 16px rgba(0, 102, 204, 0.15);
+    border-color: var(--color-primary);
 }
 
 .search-input {
     flex: 1;
-    padding: 12px 16px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--border-radius);
+    padding: 20px 0;
+    border: none;
+    border-radius: 0;
     font-size: 14px;
-    background-color: var(--color-bg-dark);
+    background: transparent;
     color: var(--color-text);
-    transition: border-color 0.2s ease;
 }
 
 .search-input:focus {
     outline: none;
-    border-color: var(--color-primary);
-    box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
+    box-shadow: none;
 }
 
 .search-btn {
-    padding: 12px 24px;
-    background-color: var(--color-primary);
+    padding: 10px 20px;
+    background-color: #001a4d;
     color: white;
     border: none;
-    border-radius: var(--border-radius);
-    font-size: 14px;
+    border-radius: 6px;
+    font-size: 13px;
     font-weight: 600;
     cursor: pointer;
     transition: background-color 0.2s ease;
     white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .search-btn:hover {
-    background-color: var(--color-primary-hover);
+    background-color: #000f33;
 }
 
 .search-btn:active {
@@ -211,6 +256,20 @@ body {
 .search-btn.loading {
     opacity: 0.7;
     cursor: not-allowed;
+}
+
+.search-icon {
+    display: flex;
+    align-items: center;
+    padding-left: 0;
+    color: var(--color-text-muted);
+    pointer-events: none;
+    flex-shrink: 0;
+}
+
+.nav-icon svg {
+    display: block;
+    color: inherit;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
@@ -237,7 +296,7 @@ body {
 .result-card {
     background-color: var(--color-bg-dark);
     padding: 16px;
-    border-radius: var(--border-radius);
+    border-radius: 14px;
     border: 1px solid var(--color-border);
     box-shadow: 0 1px 3px var(--color-card-shadow);
     transition: box-shadow 0.2s ease, border-color 0.2s ease;
@@ -272,9 +331,14 @@ body {
 
 .result-source {
     font-size: 12px;
-    color: var(--color-text-muted);
+    color: #0066cc;
     margin-bottom: 8px;
     word-break: break-all;
+    background-color: #e8f0f8;
+    padding: 6px 10px;
+    border-radius: 6px;
+    display: inline-block;
+    max-width: 100%;
 }
 
 .result-snippet {
@@ -286,14 +350,28 @@ body {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
+/* AI Response Panel (unified: avatar + response)                                */
+/* ──────────────────────────────────────────────────────────────────────────── */
+
+.ai-response-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background-color: #e8f0f8;
+    border-radius: 20px;
+    border: 1px solid #d0e0f0;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.10);
+    overflow: hidden;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────── */
 /* Avatar section                                                                 */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
 .avatar-container {
-    flex: 0 0 auto;
-    aspect-ratio: 1;
+    flex: 0 0 37%;
     background: linear-gradient(135deg, #f0f4f8 0%, #e8f1f8 100%);
-    border-radius: var(--border-radius);
+    border-radius: 0;
     overflow: hidden;
     display: flex;
     align-items: center;
@@ -314,10 +392,11 @@ body {
 .rag-response {
     flex: 1;
     overflow-y: auto;
-    padding: 16px;
-    background-color: var(--color-bg);
-    border-radius: var(--border-radius);
-    border: 1px solid var(--color-border);
+    padding: 20px;
+    background-color: transparent;
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
     font-size: 13px;
     line-height: 1.6;
     color: var(--color-text);
