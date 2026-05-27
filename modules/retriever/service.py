@@ -68,6 +68,12 @@ class LSIRetriever(BaseRetriever):
         self.tfidf: TfidfProcessor | None = None
         self.model: LSIModel | None = None
 
+        # Dynamic-indexing counters (Conf_2): how many documents were folded in
+        # since the last full fit. Used by needs_rebalance() to flag when a
+        # refit ("balanceo") is warranted to recapture new vocabulary.
+        self._base_doc_count = 0
+        self._incremental_doc_count = 0
+
     # ------------------------------------------------------------------
     # Training
     # ------------------------------------------------------------------
@@ -98,6 +104,83 @@ class LSIRetriever(BaseRetriever):
 
         # 4. Store vectors in vector repository (IDs + embeddings + URLs)
         self.repository.add_documents(corpus.documents, embeddings=embeddings)
+
+        # A full fit resets the dynamic-indexing counters: every document is now
+        # part of the base index built from the current vocabulary.
+        self._base_doc_count = len(corpus.documents)
+        self._incremental_doc_count = 0
+
+    # ------------------------------------------------------------------
+    # Dynamic indexing (Conf_2 — actualización dinámica)
+    # ------------------------------------------------------------------
+
+    def add_documents(self, corpus: IndexedCorpus) -> int:
+        """Incrementally index new documents via LSI folding-in.
+
+        Implements the "Incremental" path of dynamic indexing from the lecture
+        (Conf_2): new documents are added *without* re-fitting the SVD. Each
+        document is weighted with the existing IDF, projected onto the existing
+        latent basis, and appended to the vector repository and document store.
+
+        Terms not present in the fitted vocabulary are ignored (folding-in
+        limitation). When too many documents have been folded in, call
+        :meth:`needs_rebalance` and, if it returns True, rebuild with
+        :meth:`fit` to recapture the new vocabulary ("Balanceo").
+
+        Args:
+            corpus: IndexedCorpus of the *new* documents only, built by the
+                indexer with the same TextProcessor used for the base corpus.
+
+        Returns:
+            Number of documents added.
+
+        Raises:
+            RuntimeError: If the retriever has not been fitted or loaded.
+        """
+        if self.tfidf is None or self.model is None:
+            raise RuntimeError(
+                "Retriever must be fitted or loaded before add_documents()."
+            )
+
+        if not corpus.documents:
+            return 0
+
+        # Folding-in: TF-IDF with fixed vocabulary/IDF, then project onto the
+        # existing latent space (no SVD re-fit).
+        tfidf_matrix = self.tfidf.transform_corpus(corpus)
+        embeddings = self.model.project_documents(tfidf_matrix)
+
+        # Append to both stores (ChromaDB.add is incremental — existing vectors
+        # are untouched).
+        self.document_store.add_documents(corpus.documents)
+        self.repository.add_documents(corpus.documents, embeddings=embeddings)
+
+        self._incremental_doc_count += len(corpus.documents)
+        return len(corpus.documents)
+
+    @property
+    def incremental_fraction(self) -> float:
+        """Fraction of the index added by folding-in since the last full fit."""
+        total = self._base_doc_count + self._incremental_doc_count
+        if total == 0:
+            return 0.0
+        return self._incremental_doc_count / total
+
+    def needs_rebalance(self, threshold: float = 0.2) -> bool:
+        """Whether a full refit ("balanceo") is warranted.
+
+        Returns True once the share of folded-in documents exceeds *threshold*.
+        Past that point the fixed vocabulary increasingly fails to represent the
+        newer documents, so rebuilding with :meth:`fit` restores retrieval
+        quality.
+
+        Args:
+            threshold: Incremental-fraction cut-off in [0, 1]. Default 0.2 (20%).
+
+        Returns:
+            True if ``incremental_fraction > threshold``.
+        """
+        return self.incremental_fraction > threshold
 
     # ------------------------------------------------------------------
     # Query
@@ -235,5 +318,9 @@ class LSIRetriever(BaseRetriever):
         )
         instance.tfidf = TfidfProcessor.load(model_dir)
         instance.model = LSIModel.load(model_dir)
+        # Treat the persisted corpus as the base index so the dynamic-indexing
+        # counters start from the right denominator.
+        instance._base_doc_count = instance.tfidf.n_docs
+        instance._incremental_doc_count = 0
         return instance
 

@@ -119,12 +119,65 @@ class TfidfProcessor:
         )
         return normalize(matrix, norm="l2", axis=1)
 
+    def transform_corpus(self, corpus: IndexedCorpus) -> spmatrix:
+        """Transform a multi-document corpus using the fitted vocabulary and IDF.
+
+        Generalizes :meth:`transform` (single query) to N documents. Used for
+        dynamic indexing (folding-in): new documents are weighted with the
+        *existing* IDF and projected onto the *existing* vocabulary, so terms
+        absent from the fitted vocabulary are dropped. The matrix it returns is
+        fed to :meth:`LSIModel.project_documents`.
+
+        Args:
+            corpus: IndexedCorpus of the new documents. Only its
+                ``inverted_index`` (term → [(doc_idx, tf), ...]) and document
+                count are read; the corpus's own vocabulary is ignored in favor
+                of the fitted one.
+
+        Returns:
+            Sparse TF-IDF matrix of shape ``(n_new_docs, n_terms)`` aligned to
+            the fitted vocabulary.
+
+        Raises:
+            RuntimeError: If the processor has not been fitted.
+        """
+        if self._term_to_idx is None or self._idf is None:
+            raise RuntimeError("Must call fit() before transform_corpus()")
+
+        n_docs = len(corpus.documents)
+        n_terms = len(self._vocabulary)
+
+        rows: list[int] = []
+        cols: list[int] = []
+        data: list[float] = []
+        for term, postings in corpus.inverted_index.items():
+            term_idx = self._term_to_idx.get(term)
+            if term_idx is None:
+                continue  # out-of-vocabulary term — dropped by folding-in
+            weight = self._idf[term_idx]
+            for doc_idx, tf in postings:
+                rows.append(doc_idx)
+                cols.append(term_idx)
+                data.append(np.log1p(tf) * weight)
+
+        matrix = csr_matrix(
+            (data, (rows, cols)),
+            shape=(n_docs, n_terms),
+            dtype=np.float32,
+        )
+        return normalize(matrix, norm="l2", axis=1)
+
     @property
     def vocabulary(self) -> list[str]:
         """Return fitted vocabulary."""
         if self._vocabulary is None:
             raise RuntimeError("Must call fit() first")
         return self._vocabulary
+
+    @property
+    def n_docs(self) -> int:
+        """Number of documents the processor was fitted on."""
+        return self._n_docs
 
     def save(self, path: str | Path) -> None:
         """Save model to disk."""
