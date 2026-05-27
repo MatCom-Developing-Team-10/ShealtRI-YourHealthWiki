@@ -26,6 +26,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+import joblib
+
 from dotenv import load_dotenv
 load_dotenv()  # Load .env file for GEMINI_API_KEY and other config
 
@@ -144,7 +146,7 @@ class Pipeline:
             collection_name="medical_documents",
         )
         self.document_store = FileSystemDocumentStore(storage_dir=_STORE_DIR)
-        _lsi = LSIRetriever(
+        self._lsi = LSIRetriever(
             repository=self.repository,
             document_store=self.document_store,
             model_dir=_MODELS_DIR,
@@ -154,7 +156,7 @@ class Pipeline:
             document_store=self.document_store,
         )
         self.retriever = FallbackRetriever(
-            primary=_lsi,
+            primary=self._lsi,
             fallback=_internet,
             min_results=3,
         )
@@ -163,13 +165,50 @@ class Pipeline:
         self.corpus = None
         self._source_label = ""
 
+    def _model_exists(self) -> bool:
+        """Return True if persisted LSI artifacts are present on disk."""
+        path = Path(_MODELS_DIR)
+        return (path / "tfidf.joblib").exists() and (path / "svd.joblib").exists()
+
     def build(self) -> None:
-        """Load documents, build index, and fit the LSI model."""
+        """Load documents, build index, and fit the LSI model.
+
+        On subsequent startups, loads persisted model artifacts from disk
+        instead of re-parsing the full corpus (warm start).
+        """
         print("  loading NLP model (spaCy)...", end=" ", flush=True)
         self.text_processor = TextProcessor()
         self.indexer = IndexerService(text_processor=self.text_processor)
         print("done")
 
+        if self._model_exists():
+            self._warm_start()
+            return
+
+        self._cold_start()
+
+    def _warm_start(self) -> None:
+        """Load pre-built LSI model from disk — skips corpus parsing and SVD."""
+        print("  found saved model — loading from disk (warm start)...", end=" ", flush=True)
+        self._lsi = LSIRetriever.load(
+            repository=self.repository,
+            document_store=self.document_store,
+            model_dir=_MODELS_DIR,
+        )
+        self.retriever.primary = self._lsi
+
+        # Restore spell checker vocabulary so query correction works
+        vocab_path = Path(_MODELS_DIR) / "vocab.joblib"
+        if vocab_path.exists():
+            vocab: list[str] = joblib.load(vocab_path)
+            for term in vocab:
+                self.text_processor.spell_checker._insert(term)
+
+        n_docs = self.repository.collection.count()
+        print(f"done  [{n_docs} docs in vector DB]")
+
+    def _cold_start(self) -> None:
+        """Parse corpus, fit LSI, persist artifacts for future warm starts."""
         print("  reading documents from data/raw/...", end=" ", flush=True)
         real_docs = _load_from_raw_dir()
         if real_docs:
@@ -192,6 +231,12 @@ class Pipeline:
         print(f"  fitting LSI (n_components=100)...", end=" ", flush=True)
         self.retriever.fit(self.corpus)
         print(f"done  [{n_docs} docs, {n_terms} terms]")
+
+        print("  saving model to disk...", end=" ", flush=True)
+        Path(_MODELS_DIR).mkdir(parents=True, exist_ok=True)
+        self._lsi.save(_MODELS_DIR)
+        joblib.dump(self.corpus.vocabulary, Path(_MODELS_DIR) / "vocab.joblib")
+        print("done  (future startups will be fast)")
 
     def retrieve(
         self, query_text: str, top_k: int = 5, user_profile: UserProfile | None = None
