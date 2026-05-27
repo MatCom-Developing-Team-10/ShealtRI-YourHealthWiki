@@ -18,6 +18,10 @@ from core.models import Document
 CORPUS_COLLECTION = "corpus_curated"
 WEB_SEARCH_COLLECTION = "web_search_results"
 
+# Fallback cap on records per collection.add() call when the client does not
+# report its own limit. ChromaDB rejects single adds larger than ~5461.
+_DEFAULT_MAX_BATCH = 5000
+
 
 class ChromaRepository(BaseRepository):
     """Vector storage using ChromaDB for efficient similarity search.
@@ -63,15 +67,29 @@ class ChromaRepository(BaseRepository):
         ids = [doc.doc_id for doc in documents]
         metadatas = [{"url": doc.url} for doc in documents]
 
-        batch_size = 5000
+        # ChromaDB rejects a single add() larger than its max batch size, so we
+        # insert in chunks. Large corpora (tens of thousands of pages) exceed
+        # this limit in one call.
+        batch_size = self._max_batch_size()
         for start in range(0, len(ids), batch_size):
             end = start + batch_size
-            self.collection.upsert(
+            self.collection.add(
                 ids=ids[start:end],
                 documents=None,  # Don't store full text - use DocumentStore instead
                 metadatas=metadatas[start:end],
                 embeddings=embeddings[start:end] if embeddings is not None else None,
             )
+
+    def _max_batch_size(self) -> int:
+        """Return the safe number of records per ``collection.add()`` call.
+
+        Honors the ChromaDB client's reported limit when available, falling
+        back to a conservative constant otherwise.
+        """
+        limit = getattr(self.client, "max_batch_size", None)
+        if isinstance(limit, int) and limit > 0:
+            return limit
+        return _DEFAULT_MAX_BATCH
 
     def search_similar(self, query_vector: list[float], top_k: int = 10) -> list[tuple[str, float]]:
         """Search for documents similar to the given vector.
