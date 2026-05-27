@@ -12,19 +12,36 @@
         <aside class="sidebar">
             <nav class="sidebar-nav">
                 <div class="nav-item">
-                    <span class="nav-icon">📚</span>
+                    <span class="nav-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                        </svg>
+                    </span>
                     <span class="nav-label">Enciclopedia</span>
                 </div>
                 <div class="nav-item">
-                    <span class="nav-icon">📜</span>
+                    <span class="nav-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                    </span>
                     <span class="nav-label">Historial</span>
                 </div>
                 <div class="nav-item">
-                    <span class="nav-icon">📖</span>
+                    <span class="nav-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>
+                        </svg>
+                    </span>
                     <span class="nav-label">Biblioteca</span>
                 </div>
                 <div class="nav-item">
-                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                        </svg>
+                    </span>
                     <span class="nav-label">Ajustes</span>
                 </div>
             </nav>
@@ -40,6 +57,12 @@
         <!-- CENTER: Search + Results -->
         <main class="main-panel">
             <div class="search-container">
+                <span class="search-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                </span>
                 <input
                     type="text"
                     id="search-input"
@@ -57,48 +80,50 @@
             </div>
         </main>
 
-        <!-- RIGHT SIDEBAR: Avatar + RAG Response -->
+        <!-- RIGHT SIDEBAR: Avatar + RAG Response (unified panel) -->
         <aside class="right-panel">
-            <div class="avatar-container">
-                <!-- Greetings video (play once on load) -->
-                <video
-                    id="avatar-greetings"
-                    class="avatar-video"
-                    playsinline
-                    muted
-                    style="display: none;"
-                >
-                    <source src="/static/videos/greetings.mp4" type="video/mp4">
-                </video>
+            <div class="ai-response-panel">
+                <div class="avatar-container">
+                    <!-- Greetings video (play once on load) -->
+                    <video
+                        id="avatar-greetings"
+                        class="avatar-video"
+                        playsinline
+                        muted
+                        style="display: none;"
+                    >
+                        <source src="/static/videos/greetings.mp4" type="video/mp4">
+                    </video>
 
-                <!-- Idle video (loop) -->
-                <video
-                    id="avatar-idle"
-                    class="avatar-video"
-                    playsinline
-                    muted
-                    autoplay
-                    loop
-                    style="display: none;"
-                >
-                    <source src="/static/videos/idle.mp4" type="video/mp4">
-                </video>
+                    <!-- Idle video (loop) -->
+                    <video
+                        id="avatar-idle"
+                        class="avatar-video"
+                        playsinline
+                        muted
+                        autoplay
+                        loop
+                        style="display: none;"
+                    >
+                        <source src="/static/videos/idle.mp4" type="video/mp4">
+                    </video>
 
-                <!-- Responding video (loop) - randomly selected from 3 variants -->
-                <video
-                    id="avatar-responding"
-                    class="avatar-video"
-                    playsinline
-                    muted
-                    loop
-                    style="display: none;"
-                >
-                    <source src="/static/videos/responding.mp4" type="video/mp4">
-                </video>
-            </div>
+                    <!-- Responding video (loop) - randomly selected from 3 variants -->
+                    <video
+                        id="avatar-responding"
+                        class="avatar-video"
+                        playsinline
+                        muted
+                        loop
+                        style="display: none;"
+                    >
+                        <source src="/static/videos/responding.mp4" type="video/mp4">
+                    </video>
+                </div>
 
-            <div id="rag-response" class="rag-response">
-                <p class="response-placeholder">La respuesta aparecerá aquí</p>
+                <div id="rag-response" class="rag-response">
+                    <p class="response-placeholder">La respuesta aparecerá aquí</p>
+                </div>
             </div>
         </aside>
     </div>
