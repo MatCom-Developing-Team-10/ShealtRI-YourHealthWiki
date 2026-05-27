@@ -63,12 +63,15 @@ class ChromaRepository(BaseRepository):
         ids = [doc.doc_id for doc in documents]
         metadatas = [{"url": doc.url} for doc in documents]
 
-        self.collection.add(
-            ids=ids,
-            documents=None,  # Don't store full text - use DocumentStore instead
-            metadatas=metadatas,
-            embeddings=embeddings,
-        )
+        batch_size = 5000
+        for start in range(0, len(ids), batch_size):
+            end = start + batch_size
+            self.collection.upsert(
+                ids=ids[start:end],
+                documents=None,  # Don't store full text - use DocumentStore instead
+                metadatas=metadatas[start:end],
+                embeddings=embeddings[start:end] if embeddings is not None else None,
+            )
 
     def search_similar(self, query_vector: list[float], top_k: int = 10) -> list[tuple[str, float]]:
         """Search for documents similar to the given vector.
