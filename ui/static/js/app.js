@@ -99,6 +99,28 @@ function getRandomRespondingVariant() {
 
 let currentProfile = 'paciente';
 
+// Profile metadata: icons (SVG)
+const profileMetadata = {
+    paciente: {
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+    },
+    estudiante: {
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
+    },
+    medico: {
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v12M6 12h12"/></svg>',
+    },
+    diagnostico: {
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M12 6v6l4 2"/></svg>',
+    },
+    natural: {
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M12 6v12M6 12h12"/></svg>',
+    },
+    cuidador: {
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    },
+};
+
 async function loadProfiles() {
     try {
         const response = await fetch('/api/profiles');
@@ -110,6 +132,8 @@ async function loadProfiles() {
         profiles.forEach(profile => {
             const label = document.createElement('label');
             label.className = 'profile-option';
+            const metadata = profileMetadata[profile.slug] || { icon: '○' };
+
             if (profile.slug === currentProfile) {
                 label.classList.add('selected');
             }
@@ -129,7 +153,12 @@ async function loadProfiles() {
                 label.classList.add('selected');
             });
 
+            const iconSpan = document.createElement('span');
+            iconSpan.className = 'profile-icon';
+            iconSpan.innerHTML = metadata.icon;
+
             label.appendChild(radio);
+            label.appendChild(iconSpan);
             label.appendChild(document.createTextNode(profile.label));
             container.appendChild(label);
         });
