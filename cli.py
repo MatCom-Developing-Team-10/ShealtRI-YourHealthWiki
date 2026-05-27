@@ -38,17 +38,21 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from core.models import Document, Query, UserProfile, UserProfileType
+from core.models import Document, PipelineContext, Query, UserProfile, UserProfileType
 from core.pipeline import RetrievalContext
+from core.plugin_pipeline import PluginPipeline
 from infra.chroma_repository import ChromaRepository
 from modules.document_loader.service import DocumentLoader, DocumentLoaderError
 from modules.indexer.document_store import FileSystemDocumentStore
 from modules.indexer.service import IndexerService
+from modules.indexer.chunker import TextChunker
+from modules.ranker.service import HybridRanker
 from modules.retriever.fallback_retriever import FallbackRetriever
 from modules.retriever.service import LSIRetriever
 from modules.web_search import InternetSearchRetriever, WebContentFetcher
 from modules.text_processor.service import TextProcessor
 from modules.rag.service import RAGService
+from plugins.expansion.service import QueryExpansionPlugin
 from tests._synthetic_corpus import RAW_DOCUMENTS
 
 _CHROMA_DIR = "data/chroma"
@@ -101,19 +105,22 @@ def _load_from_raw_dir() -> list[Document] | None:
         except (json.JSONDecodeError, KeyError):
             continue
 
-    # PDF, TXT, JSON, CSV, Markdown — via DocumentLoader
-    supported_extensions = {".pdf", ".txt", ".json", ".csv", ".md"}
-    non_jsonl_files = [
+    # JSON, TXT, CSV, Markdown — via DocumentLoader, loaded file by file.
+    # PDFs are intentionally excluded: they are pre-extracted to JSON by
+    # scripts/ingest_pdfs.py, so the app loads the cheap JSON and never
+    # re-parses a PDF here (even if a .pdf is left in data/raw/).
+    supported_extensions = {".txt", ".json", ".csv", ".md"}
+    other_files = [
         f for f in _RAW_DIR.rglob("*")
-        if f.is_file() and f.suffix in supported_extensions
+        if f.is_file() and f.suffix.lower() in supported_extensions
     ]
-    if non_jsonl_files:
+    if other_files:
         loader = DocumentLoader()
-        try:
-            loaded = loader.load_from_directory(_RAW_DIR)
-            documents.extend(loaded)
-        except DocumentLoaderError as e:
-            print(f"  [warn] DocumentLoader: {e}", file=sys.stderr)
+        for file_path in other_files:
+            try:
+                documents.extend(loader.load_from_file(file_path))
+            except DocumentLoaderError as e:
+                print(f"  [warn] DocumentLoader ({file_path.name}): {e}", file=sys.stderr)
 
     return documents if documents else None
 
@@ -146,7 +153,7 @@ class Pipeline:
             collection_name="medical_documents",
         )
         self.document_store = FileSystemDocumentStore(storage_dir=_STORE_DIR)
-        self._lsi = LSIRetriever(
+        self.lsi = LSIRetriever(
             repository=self.repository,
             document_store=self.document_store,
             model_dir=_MODELS_DIR,
@@ -156,12 +163,17 @@ class Pipeline:
             document_store=self.document_store,
         )
         self.retriever = FallbackRetriever(
-            primary=self._lsi,
+            primary=self.lsi,
             fallback=_internet,
             min_results=3,
         )
         self.context = RetrievalContext(strategy=self.retriever)
-        self.rag_service = RAGService()
+        # Wire the hybrid re-ranker into RAG so retrieved docs are reordered
+        # (BM25 + LSI) before the answer is generated.
+        self.rag_service = RAGService(ranker=HybridRanker())
+        # Microkernel: plugins are registered in build() once the vocabulary
+        # the expansion plugin needs is available. Empty here = no-op pipeline.
+        self.plugins = PluginPipeline()
         self.corpus = None
         self._source_label = ""
 
@@ -178,7 +190,12 @@ class Pipeline:
         """
         print("  loading NLP model (spaCy)...", end=" ", flush=True)
         self.text_processor = TextProcessor()
-        self.indexer = IndexerService(text_processor=self.text_processor)
+        chunker = TextChunker(
+            chunk_size=300,
+            overlap=50,
+            strategy="fixed",
+        )
+        self.indexer = IndexerService(text_processor=self.text_processor, chunker=chunker)
         print("done")
 
         if self._model_exists():
@@ -190,12 +207,12 @@ class Pipeline:
     def _warm_start(self) -> None:
         """Load pre-built LSI model from disk — skips corpus parsing and SVD."""
         print("  found saved model — loading from disk (warm start)...", end=" ", flush=True)
-        self._lsi = LSIRetriever.load(
+        self.lsi = LSIRetriever.load(
             repository=self.repository,
             document_store=self.document_store,
             model_dir=_MODELS_DIR,
         )
-        self.retriever.primary = self._lsi
+        self.retriever.primary = self.lsi
 
         # Restore spell checker vocabulary so query correction works
         vocab_path = Path(_MODELS_DIR) / "vocab.joblib"
@@ -234,9 +251,16 @@ class Pipeline:
 
         print("  saving model to disk...", end=" ", flush=True)
         Path(_MODELS_DIR).mkdir(parents=True, exist_ok=True)
-        self._lsi.save(_MODELS_DIR)
+        self.lsi.save(_MODELS_DIR)
         joblib.dump(self.corpus.vocabulary, Path(_MODELS_DIR) / "vocab.joblib")
         print("done  (future startups will be fast)")
+
+        # Register optional plugins now that the fitted vocabulary is available.
+        # The expansion plugin needs it to filter expanded terms to ones the
+        # TF-IDF model actually knows.
+        self.plugins.register(
+            QueryExpansionPlugin(target_vocabulary=self.lsi.tfidf.vocabulary)
+        )
 
     def retrieve(
         self, query_text: str, top_k: int = 5, user_profile: UserProfile | None = None
@@ -249,6 +273,13 @@ class Pipeline:
         """
         query_corpus = self.indexer.build_query(query_text)
         query = Query(text=query_text, indexed_corpus=query_corpus, user_profile=user_profile)
+
+        # pre_retrieval hook: plugins (e.g. query expansion) may rewrite the
+        # query's indexed_corpus before the retriever runs.
+        context = PipelineContext(query=query)
+        context = self.plugins.run_hook("pre_retrieval", context)
+        query = context.query
+
         results = self.context.execute_search(query, top_k=top_k)
 
         rag_response = None

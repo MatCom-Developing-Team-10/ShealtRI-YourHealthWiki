@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 import requests
@@ -66,6 +67,7 @@ class WebContentFetcher:
         max_text_length: int = 8000,
         min_text_length: int = 200,
         user_agent: str = _USER_AGENT,
+        max_workers: int = 8,
     ) -> None:
         """Initialize the fetcher.
 
@@ -74,10 +76,12 @@ class WebContentFetcher:
             max_text_length: Max characters to keep per fetched page.
             min_text_length: Minimum characters required to keep a page.
             user_agent: User-Agent header for HTTP requests.
+            max_workers: Maximum number of pages to download concurrently.
         """
         self.request_timeout = request_timeout
         self.max_text_length = max_text_length
         self.min_text_length = min_text_length
+        self.max_workers = max_workers
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": user_agent})
 
@@ -106,11 +110,17 @@ class WebContentFetcher:
             )
             return []
 
-        documents: list[Document] = []
-        for rank, (url, title, snippet) in enumerate(search_results):
-            doc = self._fetch_page(url, title, snippet, rank)
-            if doc is not None:
-                documents.append(doc)
+        # Download the result pages concurrently. Network latency dominates, so
+        # fetching in parallel cuts total time from the sum of every page fetch
+        # down to roughly the slowest single fetch. submit() preserves rank
+        # order: the futures list stays in submission order.
+        max_workers = min(len(search_results), self.max_workers)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(self._fetch_page, url, title, snippet, rank)
+                for rank, (url, title, snippet) in enumerate(search_results)
+            ]
+            documents = [doc for f in futures if (doc := f.result()) is not None]
 
         logger.info(
             "WebContentFetcher: fetched %d/%d pages for query='%s'",

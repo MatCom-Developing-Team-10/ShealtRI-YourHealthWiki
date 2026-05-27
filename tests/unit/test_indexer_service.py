@@ -25,6 +25,7 @@ class _FakeTextProcessor:
 
     Implements only the interface IndexerService relies on:
         - .process(text, is_query) -> str
+        - .process_many(texts, is_query) -> list[str]
         - .spell_checker (any object with words()/correct())
     """
 
@@ -48,6 +49,9 @@ class _FakeTextProcessor:
             for tok in tokens:
                 self.spell_checker._insert(tok)
         return " ".join(tokens)
+
+    def process_many(self, texts: list[str], is_query: bool = False) -> list[str]:
+        return [self.process(text, is_query=is_query) for text in texts]
 
 
 # ---------------------------------------------------------------------------
