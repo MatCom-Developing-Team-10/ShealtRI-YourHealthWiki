@@ -113,6 +113,37 @@ class LSIModel:
         query_latent: np.ndarray = self._svd.transform(query_tfidf)
         return query_latent[0].tolist()
 
+    def project_documents(self, tfidf_matrix: spmatrix) -> list[list[float]]:
+        """Project new documents into the existing latent space (folding-in).
+
+        This is the dynamic-indexing primitive: it maps new documents onto the
+        already-trained SVD basis *without* re-fitting the model, exactly as the
+        lecture (Conf_2) describes for incremental updates ("añadir nuevos
+        documentos sin reindexar todo"). Mathematically it applies the folding-in
+        formula ``d_proj = d · Vk`` (i.e. ``TruncatedSVD.transform``, which
+        computes ``X · components_.T``), to every row of the matrix.
+
+        Because the SVD basis stays fixed, terms absent from the original
+        vocabulary contribute nothing — that information loss is why a periodic
+        full ``fit`` (the "balanceo" step) is still needed once enough new
+        documents accumulate.
+
+        Args:
+            tfidf_matrix: Sparse matrix of shape ``(n_new_docs, n_terms)`` built
+                with the *same* vocabulary used at fit time
+                (``TfidfProcessor.transform_corpus``).
+
+        Returns:
+            Latent vectors — one list of length ``n_components`` per document.
+
+        Raises:
+            RuntimeError: If the model has not been fitted.
+        """
+        if not self._fitted:
+            raise RuntimeError("LSIModel must be fitted before projecting documents.")
+        latent: np.ndarray = self._svd.transform(tfidf_matrix)
+        return latent.tolist()
+
     @property
     def is_fitted(self) -> bool:
         """Whether the model has been fitted."""
