@@ -114,13 +114,27 @@ class WebContentFetcher:
         # fetching in parallel cuts total time from the sum of every page fetch
         # down to roughly the slowest single fetch. submit() preserves rank
         # order: the futures list stays in submission order.
+        def _safe_result(future) -> "Document | None":
+            """Resolve a future, isolating any unexpected per-page failure.
+
+            ``_fetch_page`` already returns None on its own handled errors, but an
+            unexpected exception inside a worker (e.g. a parser crash) would
+            otherwise re-raise here and abort the whole fetch. Swallowing it lets
+            the remaining successfully-fetched pages through.
+            """
+            try:
+                return future.result()
+            except Exception:
+                logger.warning("WebContentFetcher: a page fetch failed; skipping", exc_info=True)
+                return None
+
         max_workers = min(len(search_results), self.max_workers)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
                 executor.submit(self._fetch_page, url, title, snippet, rank)
                 for rank, (url, title, snippet) in enumerate(search_results)
             ]
-            documents = [doc for f in futures if (doc := f.result()) is not None]
+            documents = [doc for f in futures if (doc := _safe_result(f)) is not None]
 
         logger.info(
             "WebContentFetcher: fetched %d/%d pages for query='%s'",
