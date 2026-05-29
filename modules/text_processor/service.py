@@ -239,14 +239,15 @@ class TextProcessor:
                 tokens.append(lemma)
         return tokens
 
-    def _add_to_vocabulary(self, tokens: set[str] | list[str]) -> None:
+    def _add_to_vocabulary(self, tokens: set[str]) -> None:
         """Add tokens to the spell checker vocabulary.
 
         Args:
-            tokens: Processed tokens to add. Deduplicated before insertion so
-                terms repeated across the corpus are only inserted once.
+            tokens: Deduplicated processed tokens to insert. The caller
+                (:meth:`process_many`) already accumulates a set, so no further
+                deduplication is performed here.
         """
-        for token in set(tokens):
+        for token in tokens:
             self.spell_checker._insert(token)
 
     def _correct_spelling(self, tokens: list[str]) -> list[str]:
@@ -301,71 +302,6 @@ class TextProcessor:
         text = re.sub(r"\s+", " ", text).strip()
 
         return text
-
-    def tokenize(self, text: str) -> list[str]:
-        """Tokenize normalized text using spaCy.
-
-        Args:
-            text: Normalized text input.
-
-        Returns:
-            List of tokens.
-        """
-        doc = self._nlp(text)
-        return [token.text for token in doc]
-
-    def remove_stopwords(self, tokens: list[str]) -> list[str]:
-        """Remove stopwords from token list.
-
-        Args:
-            tokens: List of tokens.
-
-        Returns:
-            Filtered token list without stopwords.
-        """
-        return [t for t in tokens if t not in self._stopwords]
-
-    def lemmatize(self, tokens: list[str]) -> list[str]:
-        """Apply lemmatization to tokens using spaCy.
-
-        Uses spaCy's lemmatizer with POS tagging for accurate lemmatization:
-            - medicamentos → medicamento
-            - hipertensión → hipertensión (preserved)
-            - arterial → arterial (preserved as adjective)
-            - causa → causar (verb infinitive)
-
-        Args:
-            tokens: List of tokens.
-
-        Returns:
-            List of lemmatized tokens.
-
-        Note:
-            Unlike stemming, lemmatization preserves valid word forms and is
-            more suitable for medical terminology where precision matters.
-        """
-        # Process tokens as a single document for POS tagging context
-        text = " ".join(tokens)
-        doc = self._nlp(text)
-        return [token.lemma_ for token in doc]
-
-    def filter_tokens(self, tokens: list[str]) -> list[str]:
-        """Filter tokens by length constraints.
-
-        Removes tokens that are:
-            - Too short (< min_token_length)
-            - Too long (> max_token_length)
-
-        Args:
-            tokens: List of tokens.
-
-        Returns:
-            Filtered token list.
-        """
-        return [
-            t for t in tokens
-            if self.config.min_token_length <= len(t) <= self.config.max_token_length
-        ]
 
     @staticmethod
     def _strip_accents(text: str) -> str:
