@@ -39,16 +39,30 @@ class TestFit:
         assert model.n_components == 1
         assert all(len(v) == 1 for v in vectors)
 
-    def test_single_document_corpus_raises_valueerror(self):
-        """Single document corpus should raise ValueError with clear message.
+    def test_single_document_corpus_supported_via_padding(self):
+        """Single-doc corpus is supported via internal zero-row padding.
 
-        LSI requires at least 2 documents to compute SVD. A single document
-        cannot be decomposed into latent dimensions.
+        Before the fix this raised because TruncatedSVD requires
+        ``n_components < min(n_samples, n_features)`` and with 1 sample
+        that constraint becomes ``< 1``. The fit method now pads with a
+        synthetic zero row, performs the SVD, and discards the padding's
+        latent vector — the caller sees exactly one document vector and
+        the fitted model remains usable for ``project_query``.
         """
         m = _matrix(rows=1, cols=5)
         model = LSIModel(n_components=2)
-        with pytest.raises(ValueError, match="at least 2 documents"):
-            model.fit(m)
+        vectors = model.fit(m)
+        assert len(vectors) == 1
+        assert len(vectors[0]) >= 1
+        assert model.is_fitted is True
+
+    def test_empty_corpus_still_raises_valueerror(self):
+        """A zero-document corpus is still an error — the relaxation only
+        covers ``n_docs == 1``."""
+        empty = csr_matrix((0, 5), dtype=np.float32)
+        model = LSIModel(n_components=2)
+        with pytest.raises(ValueError, match="at least one document"):
+            model.fit(empty)
 
 
 class TestProjectQuery:

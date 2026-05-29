@@ -12,7 +12,7 @@ from pathlib import Path
 
 import joblib
 import numpy as np
-from scipy.sparse import spmatrix
+from scipy.sparse import csr_matrix, spmatrix, vstack
 from sklearn.decomposition import TruncatedSVD
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -65,23 +65,43 @@ class LSIModel:
 
         Returns:
             Document vectors in latent space — list of lists, one per
-            document, each of length ``n_components``.
+            document, each of length ``n_components`` (or fewer if the
+            corpus is too small for the requested ``n_components``).
 
         Raises:
-            ValueError: If corpus has fewer than 2 documents (LSI requires
-                at least 2 documents to decompose).
+            ValueError: If the corpus is empty.
+
+        Notes:
+            scikit-learn's ``TruncatedSVD`` requires
+            ``n_components < min(n_samples, n_features)``. For a
+            single-document corpus this constraint reduces ``n_components``
+            below 1 and the decomposition is rejected. We handle that
+            degenerate case by padding the matrix with a synthetic zero
+            row so SVD has two samples to work with, then discard the
+            padding's latent vector. The fitted ``_svd`` remains usable for
+            ``project_query`` / ``project_documents`` against the original
+            (single) document, which is what callers expect.
         """
         n_docs, n_terms = tfidf_matrix.shape
-        
-        # Validate minimum corpus size for SVD
-        if n_docs < 2:
+
+        if n_docs == 0:
             raise ValueError(
-                f"LSI requires at least 2 documents to fit. "
-                f"Corpus has {n_docs} document(s)."
+                "LSI requires at least one document to fit; got an empty corpus."
             )
-        
-        # Clamp k: SVD requires k < min(n_docs, n_terms)
-        effective_k = max(1, min(self.n_components, n_terms - 1, n_docs - 1))
+
+        # Padded SVD path for the degenerate single-document case.
+        if n_docs == 1:
+            zero_row = csr_matrix((1, n_terms), dtype=tfidf_matrix.dtype)
+            matrix_for_svd: spmatrix = vstack([tfidf_matrix, zero_row])
+            keep_rows = 1
+        else:
+            matrix_for_svd = tfidf_matrix
+            keep_rows = n_docs
+
+        n_samples = matrix_for_svd.shape[0]
+
+        # SVD requires k < min(n_samples, n_features); clamp to [1, ...].
+        effective_k = max(1, min(self.n_components, n_terms - 1, n_samples - 1))
         if effective_k < self.n_components:
             self._svd = TruncatedSVD(
                 n_components=effective_k,
@@ -91,9 +111,11 @@ class LSIModel:
             )
             self.n_components = effective_k
 
-        doc_vectors: np.ndarray = self._svd.fit_transform(tfidf_matrix)
+        doc_vectors: np.ndarray = self._svd.fit_transform(matrix_for_svd)
         self._fitted = True
-        return doc_vectors.tolist()
+
+        # Drop the padding row's vector when the single-doc path was used.
+        return doc_vectors[:keep_rows].tolist()
 
     def project_query(self, query_tfidf: spmatrix) -> list[float]:
         """Project a TF-IDF query vector into the latent space.
