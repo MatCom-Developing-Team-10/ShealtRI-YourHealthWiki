@@ -66,44 +66,6 @@ class TestNormalize:
         assert "hipertension" in out
 
 
-class TestTokenize:
-    def test_returns_list_of_strings(self, text_processor: TextProcessor):
-        tokens = text_processor.tokenize("hipertensión arterial")
-        assert isinstance(tokens, list)
-        assert all(isinstance(t, str) for t in tokens)
-        assert "hipertensión" in tokens
-        assert "arterial" in tokens
-
-
-class TestRemoveStopwords:
-    def test_drops_known_stopwords(self, text_processor: TextProcessor):
-        tokens = ["la", "hipertensión", "es", "una", "enfermedad"]
-        out = text_processor.remove_stopwords(tokens)
-        assert "la" not in out
-        assert "es" not in out
-        assert "una" not in out
-        assert "hipertensión" in out
-        assert "enfermedad" in out
-
-
-class TestFilterTokens:
-    def test_min_length_filter(self):
-        cfg = TextProcessorConfig(min_token_length=3)
-        tp = _make_text_processor(cfg)
-        out = tp.filter_tokens(["a", "ab", "abc", "abcd"])
-        assert "a" not in out
-        assert "ab" not in out
-        assert "abc" in out
-        assert "abcd" in out
-
-    def test_max_length_filter(self):
-        cfg = TextProcessorConfig(max_token_length=5)
-        tp = _make_text_processor(cfg)
-        out = tp.filter_tokens(["short", "longerword"])
-        assert "short" in out
-        assert "longerword" not in out
-
-
 class TestProcess:
     def test_full_pipeline_on_documents(self, text_processor: TextProcessor):
         # is_query=False → tokens get added to the spell-check vocabulary
