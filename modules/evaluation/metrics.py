@@ -131,7 +131,7 @@ def f_measure(p: float, r: float, beta: float = 1.0) -> float:
         p: Precision.
         r: Recall.
         beta: Weighting factor. ``beta == 1`` weights P and R equally (F1);
-            ``beta > 1`` favours precision; ``beta < 1`` favours recall.
+            ``beta > 1`` favours recall; ``beta < 1`` favours precision.
 
     Returns:
         F-measure in [0, 1]. Returns 0.0 when both P and R are 0.
