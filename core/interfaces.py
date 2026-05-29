@@ -162,6 +162,22 @@ class BaseRepository(ABC):
         """
         raise NotImplementedError
 
+    def get_embedding(self, doc_id: str) -> list[float] | None:
+        """Return the stored embedding for ``doc_id``, or None if unknown.
+
+        Used by feedback algorithms (Rocchio) that need the latent vector
+        of specific documents to nudge the query vector toward / away from
+        them. Default implementation raises NotImplementedError; subclasses
+        should override when they have efficient embedding lookup.
+
+        Args:
+            doc_id: Document identifier.
+
+        Returns:
+            Latent vector if the doc is known, ``None`` otherwise.
+        """
+        raise NotImplementedError("Embedding lookup not supported by this repository")
+
     @abstractmethod
     def search_similar(self, query_vector: list[float], top_k: int = 10) -> list[tuple[str, float]]:
         """Search for documents similar to the given vector.

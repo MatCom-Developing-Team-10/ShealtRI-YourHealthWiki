@@ -91,6 +91,31 @@ class ChromaRepository(BaseRepository):
             return limit
         return _DEFAULT_MAX_BATCH
 
+    def get_embedding(self, doc_id: str) -> list[float] | None:
+        """Return the stored embedding for ``doc_id`` or None if unknown.
+
+        Used by relevance-feedback algorithms (Rocchio) that need the latent
+        vector of specific documents. ChromaDB's ``include=['embeddings']``
+        flag returns vectors alongside the IDs query.
+        """
+        try:
+            result = self.collection.get(ids=[doc_id], include=["embeddings"])
+        except Exception as exc:  # pragma: no cover - defensive
+            import logging
+            logging.getLogger(__name__).warning(
+                "ChromaDB embedding fetch failed for %s: %s", doc_id, exc
+            )
+            return None
+
+        if not result or not result.get("embeddings"):
+            return None
+        vectors = result["embeddings"]
+        if vectors is None or len(vectors) == 0:
+            return None
+        first = vectors[0]
+        # ChromaDB may return numpy arrays — normalise to list[float].
+        return [float(x) for x in first]
+
     def search_similar(self, query_vector: list[float], top_k: int = 10) -> list[tuple[str, float]]:
         """Search for documents similar to the given vector.
 

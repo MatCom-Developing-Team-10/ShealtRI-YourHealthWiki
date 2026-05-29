@@ -42,6 +42,7 @@ class LSIRetriever(BaseRetriever):
         model_dir: str = "models/lsi",
         n_components: int = 100,
         similarity_threshold: float | None = None,
+        feedback_service: "RelevanceFeedbackService | None" = None,
     ) -> None:
         """Initialize with repository, document store, and hyper-parameters.
 
@@ -53,6 +54,11 @@ class LSIRetriever(BaseRetriever):
             similarity_threshold: Minimum similarity score (0-1) for results.
                 Results below this threshold are filtered out. If None, uses
                 DEFAULT_SIMILARITY_THRESHOLD (0.25).
+            feedback_service: Optional
+                :class:`~plugins.feedback.RelevanceFeedbackService`. When
+                provided, the latent query vector is re-weighted via Rocchio
+                using any judgments the user has previously recorded for
+                this query text. When None, retrieval is unchanged.
         """
         self.repository = repository
         self.document_store = document_store
@@ -63,6 +69,7 @@ class LSIRetriever(BaseRetriever):
             if similarity_threshold is not None
             else self.DEFAULT_SIMILARITY_THRESHOLD
         )
+        self.feedback_service = feedback_service
 
         # Sub-components — initialized during fit or load
         self.tfidf: TfidfProcessor | None = None
@@ -237,6 +244,21 @@ class LSIRetriever(BaseRetriever):
         # Phase 1: Vector similarity search
         query_tfidf = self.tfidf.transform(query.indexed_corpus)
         query_vector = self.model.project_query(query_tfidf)
+
+        # Apply explicit relevance feedback (Rocchio) when a feedback service
+        # is wired and the user has previously judged docs for this query.
+        # No-op when feedback_service is None or no judgments exist.
+        if self.feedback_service is not None:
+            try:
+                query_vector = self.feedback_service.apply_to_query(
+                    query.text,
+                    query_vector,
+                    self.repository.get_embedding,
+                )
+            except NotImplementedError:
+                # Repository does not expose embedding lookup — silently
+                # skip feedback rather than crash retrieval.
+                pass
 
         # Get ranked (doc_id, score) pairs from vector DB
         results = self.repository.search_similar(query_vector, top_k=top_k)
