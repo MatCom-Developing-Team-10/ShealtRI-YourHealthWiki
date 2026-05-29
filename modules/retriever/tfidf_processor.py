@@ -147,18 +147,28 @@ class TfidfProcessor:
         n_docs = len(corpus.documents)
         n_terms = len(self._vocabulary)
 
-        rows: list[int] = []
-        cols: list[int] = []
-        data: list[float] = []
+        # Gather (doc, term, tf) triples per term as arrays, then apply the
+        # TF-IDF weight (log1p(tf) * idf) in a single vectorized pass — the same
+        # approach used in fit(), far cheaper than a Python loop over postings.
+        row_parts: list[np.ndarray] = []
+        col_parts: list[np.ndarray] = []
+        tf_parts: list[np.ndarray] = []
         for term, postings in corpus.inverted_index.items():
             term_idx = self._term_to_idx.get(term)
-            if term_idx is None:
+            if term_idx is None or not postings:
                 continue  # out-of-vocabulary term — dropped by folding-in
-            weight = self._idf[term_idx]
-            for doc_idx, tf in postings:
-                rows.append(doc_idx)
-                cols.append(term_idx)
-                data.append(np.log1p(tf) * weight)
+            arr = np.asarray(postings, dtype=np.int64)  # shape (n_postings, 2)
+            row_parts.append(arr[:, 0])
+            col_parts.append(np.full(len(postings), term_idx, dtype=np.int64))
+            tf_parts.append(arr[:, 1])
+
+        if row_parts:
+            rows = np.concatenate(row_parts)
+            cols = np.concatenate(col_parts)
+            tfs = np.concatenate(tf_parts).astype(np.float32)
+            data = np.log1p(tfs) * self._idf[cols]
+        else:
+            rows = cols = data = np.empty(0)
 
         matrix = csr_matrix(
             (data, (rows, cols)),
