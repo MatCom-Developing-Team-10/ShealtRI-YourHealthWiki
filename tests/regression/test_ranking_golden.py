@@ -145,6 +145,9 @@ def test_score_monotonicity_for_repeated_terms(fitted_retriever):
     )
     short_score = short_results[0].score if short_results else 0.0
     long_score = long_results[0].score if long_results else 0.0
-    assert long_score >= short_score, (
-        f"longer on-topic query lost score: short={short_score:.4f} long={long_score:.4f}"
+    # Allow tiny floating-point slack — both scores being effectively 1.0
+    # is the normal outcome for an unambiguous query; we only want to
+    # catch real monotonicity regressions, not 1e-16 noise.
+    assert long_score >= short_score - 1e-9, (
+        f"longer on-topic query lost score: short={short_score:.6f} long={long_score:.6f}"
     )

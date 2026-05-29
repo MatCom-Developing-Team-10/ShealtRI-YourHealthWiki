@@ -21,6 +21,7 @@ except OSError:
 
 from core.models import Query
 from modules.indexer import IndexerService
+from modules.indexer.service import IndexerConfig
 from modules.retriever import LSIRetriever
 
 
@@ -45,7 +46,10 @@ def test_full_pipeline_returns_relevant_documents(
     The 20-doc corpus has at least one document specifically about
     hipertensión arterial; the LSI projection must rank it among the top-5.
     """
-    indexer = IndexerService(text_processor=fresh_processor)
+    indexer = IndexerService(
+        text_processor=fresh_processor,
+        config=IndexerConfig(min_term_frequency=1),
+    )
     corpus = indexer.build(sample_documents)
 
     retriever = LSIRetriever(
@@ -81,7 +85,10 @@ def test_spell_correction_recovers_match(
     ``build()``; on ``build_query()`` it corrects close-distance typos back
     to known vocabulary so the TF-IDF transform doesn't drop everything.
     """
-    indexer = IndexerService(text_processor=fresh_processor)
+    indexer = IndexerService(
+        text_processor=fresh_processor,
+        config=IndexerConfig(min_term_frequency=1),
+    )
     corpus = indexer.build(sample_documents)
 
     retriever = LSIRetriever(

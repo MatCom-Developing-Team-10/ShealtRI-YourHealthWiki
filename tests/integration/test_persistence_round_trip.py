@@ -25,7 +25,7 @@ except OSError:
 
 from core.models import Query
 from modules.indexer.index_store import IndexStore
-from modules.indexer.service import IndexerService
+from modules.indexer.service import IndexerConfig, IndexerService
 from modules.retriever import LSIRetriever
 
 
@@ -53,7 +53,10 @@ def test_index_round_trip_preserves_query_results(
     model_dir = tmp_path / "models"
 
     # --- 1) Build & save ---
-    indexer = IndexerService(text_processor=fresh_processor)
+    indexer = IndexerService(
+        text_processor=fresh_processor,
+        config=IndexerConfig(min_term_frequency=1),
+    )
     corpus = indexer.build(sample_documents)
 
     retriever = LSIRetriever(
@@ -89,7 +92,10 @@ def test_index_round_trip_preserves_query_results(
     reloaded_corpus = store.load()
     assert len(reloaded_corpus.documents) == len(sample_documents)
 
-    reloaded_indexer = IndexerService(text_processor=fresh_processor)
+    reloaded_indexer = IndexerService(
+        text_processor=fresh_processor,
+        config=IndexerConfig(min_term_frequency=1),
+    )
 
     reloaded_retriever = LSIRetriever.load(
         repository=in_memory_repo,
@@ -109,7 +115,10 @@ def test_index_round_trip_preserves_query_results(
 
 def test_manifest_metadata_after_reload(sample_documents, tmp_path, fresh_processor):
     """The manifest is the only source of truth for n_documents/n_terms after restart."""
-    indexer = IndexerService(text_processor=fresh_processor)
+    indexer = IndexerService(
+        text_processor=fresh_processor,
+        config=IndexerConfig(min_term_frequency=1),
+    )
     corpus = indexer.build(sample_documents)
 
     store = IndexStore(storage_dir=tmp_path / "indexer")

@@ -20,6 +20,7 @@ except OSError:
 
 from core.models import Query
 from modules.indexer import IndexerService
+from modules.indexer.service import IndexerConfig
 from modules.retriever import LSIRetriever
 
 
@@ -37,7 +38,12 @@ def fitted_lsi(sample_documents, text_processor):
     store = InMemoryDocumentStore()
     repo = InMemoryRepository()
 
-    indexer = IndexerService(text_processor=text_processor)
+    # min_term_frequency=1 ensures topical terms appearing in only one
+    # document of the 20-doc fixture survive the vocabulary filter.
+    indexer = IndexerService(
+        text_processor=text_processor,
+        config=IndexerConfig(min_term_frequency=1),
+    )
     corpus = indexer.build(sample_documents)
 
     retriever = LSIRetriever(

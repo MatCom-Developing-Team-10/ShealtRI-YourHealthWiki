@@ -11,7 +11,7 @@ change in the commit message.
 
 from __future__ import annotations
 
-from modules.text_processor.stopwords import (
+from core.stopwords import (
     ADDITIONAL_SPANISH_STOPWORDS,
     MEDICAL_ABBREVIATIONS,
     SPANISH_MEDICAL_STOPWORDS,

@@ -28,6 +28,7 @@ if _iu.find_spec("es_core_news_md") is None:
 
 from core.models import PipelineContext, Query
 from modules.indexer import IndexerService
+from modules.indexer.service import IndexerConfig
 from modules.retriever import LSIRetriever
 from plugins.expansion import QueryExpander, QueryExpansionPlugin
 
@@ -43,7 +44,10 @@ def fitted_pipeline(sample_documents, text_processor):
 
     store = InMemoryDocumentStore()
     repo = InMemoryRepository()
-    indexer = IndexerService(text_processor=text_processor)
+    indexer = IndexerService(
+        text_processor=text_processor,
+        config=IndexerConfig(min_term_frequency=1),
+    )
     corpus = indexer.build(sample_documents)
 
     retriever = LSIRetriever(
