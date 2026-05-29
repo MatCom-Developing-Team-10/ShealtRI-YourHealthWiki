@@ -67,6 +67,15 @@ class ChromaRepository(BaseRepository):
         ids = [doc.doc_id for doc in documents]
         metadatas = [{"url": doc.url} for doc in documents]
 
+        # Guard against a documents/embeddings length mismatch up front. Without
+        # this check the batch loop below would slice misaligned embeddings and
+        # leave the collection partially populated before ChromaDB finally raises.
+        if embeddings is not None and len(embeddings) != len(ids):
+            raise ValueError(
+                f"embeddings ({len(embeddings)}) and documents ({len(ids)}) "
+                "must have the same length"
+            )
+
         # ChromaDB rejects a single add() larger than its max batch size, so we
         # insert in chunks. Large corpora (tens of thousands of pages) exceed
         # this limit in one call.
