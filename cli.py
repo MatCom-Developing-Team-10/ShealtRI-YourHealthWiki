@@ -164,6 +164,7 @@ class Pipeline:
             primary=self.lsi,
             fallback=_internet,
             min_results=3,
+            min_score=0.15,  # trigger web fallback when LSI top result scores below 15%
         )
         self.context = RetrievalContext(strategy=self.retriever)
         # The hybrid re-ranker (BM25 + LSI) is a first-class pipeline stage: it
@@ -323,7 +324,11 @@ class Pipeline:
             self._cold_start()
 
     def retrieve(
-        self, query_text: str, top_k: int = 5, user_profile: UserProfile | None = None
+        self,
+        query_text: str,
+        top_k: int = 5,
+        user_profile: UserProfile | None = None,
+        force_web: bool = False,
     ) -> tuple[list, object | None]:
         """Run the full query pipeline and return retrieved documents and RAG response.
 
@@ -343,8 +348,17 @@ class Pipeline:
         context = self.plugins.run_hook("pre_retrieval", context)
         query = context.query
 
+        # Honour the UI toggle: temporarily lower min_results so the fallback
+        # fires regardless of how many local results the LSI returned.
+        original_min = self.retriever.min_results
+        if force_web:
+            self.retriever.min_results = top_k + 1
+
         # Retrieval.
         context.results = self.context.execute_search(query, top_k=top_k)
+
+        if force_web:
+            self.retriever.min_results = original_min
 
         # post_retrieval: plugins act on the raw retrieved set before ranking.
         context = self.plugins.run_hook("post_retrieval", context)

@@ -445,9 +445,13 @@ class IndexerService:
         }
         vocabulary = sorted(inverted_index.keys())
 
+        get_corrections = getattr(self.text_processor, "get_last_corrections", None)
+        corrections = get_corrections() if get_corrections is not None else {}
+        corrected_text = " ".join(tokens) if corrections else None
+
         logger.debug(
-            "Built query corpus: raw=%r, tokens=%d, unique_terms=%d",
-            query_text, len(tokens), len(vocabulary),
+            "Built query corpus: raw=%r, tokens=%d, unique_terms=%d, corrections=%s",
+            query_text, len(tokens), len(vocabulary), corrections or "none",
         )
 
         return IndexedCorpus(
@@ -455,6 +459,7 @@ class IndexerService:
             processed_texts=[processed],
             inverted_index=inverted_index,
             vocabulary=vocabulary,
+            corrected_text=corrected_text,
         )
 
     # ------------------------------------------------------------------
