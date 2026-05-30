@@ -26,6 +26,34 @@ from cli import Pipeline
 from modules.evaluation.service import EvaluationService, _build_lsi_search_fn
 from modules.evaluation.dataset import load_dataset
 
+
+def extract_snippet(text: str, query: str, length: int = 300) -> str:
+    """Return a query-aware excerpt from text.
+
+    Slides a window over the text and picks the position where the most
+    query terms appear, then returns a fragment of `length` characters
+    centred on that position.
+    """
+    clean = text.replace("\n", " ")
+    terms = [t.lower() for t in query.split() if len(t) > 2]
+    if not terms or len(clean) <= length:
+        snippet = clean[:length]
+        return snippet + "…" if len(clean) > length else snippet
+
+    lower = clean.lower()
+    best_pos, best_score = 0, -1
+    for i in range(0, len(clean) - length + 1, 30):
+        score = sum(lower[i : i + length].count(t) for t in terms)
+        if score > best_score:
+            best_score, best_pos = score, i
+
+    start = best_pos
+    end = min(start + length, len(clean))
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(clean) else ""
+    return prefix + clean[start:end].strip() + suffix
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic models for API requests/responses
 # ─────────────────────────────────────────────────────────────────────────────
@@ -130,9 +158,7 @@ def query_endpoint(req: QueryRequest) -> QueryResponse:
     doc_results = []
     for result in (results or []):
         title = result.document.metadata.get("title", result.document.doc_id)
-        snippet = result.document.text[:150].replace("\n", " ")
-        if len(snippet) >= 150:
-            snippet += "..."
+        snippet = extract_snippet(result.document.text, req.query, length=300)
 
         source_type = result.document.metadata.get("origin", "local")
         doc_results.append(DocumentResult(
