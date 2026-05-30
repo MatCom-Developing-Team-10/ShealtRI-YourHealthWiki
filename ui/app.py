@@ -197,6 +197,18 @@ def query_endpoint(req: QueryRequest) -> QueryResponse:
     )
 
 
+@app.get("/api/document")
+def serve_document(path: str) -> FileResponse:
+    """Serve a local document file so the browser can open it."""
+    resolved = (_PROJECT_ROOT / path).resolve()
+    allowed_root = (_PROJECT_ROOT / "data").resolve()
+    if not str(resolved).startswith(str(allowed_root)):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(str(resolved))
+
+
 @app.get("/api/eval")
 def eval_endpoint(k: int = 10) -> EvalResponse:
     """Run the bundled evaluation dataset against the LSI retriever."""
