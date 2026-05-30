@@ -26,8 +26,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-import joblib
-
 from dotenv import load_dotenv
 load_dotenv()  # Load .env file for GEMINI_API_KEY and other config
 
@@ -57,6 +55,28 @@ _CHROMA_DIR = "data/chroma"
 _STORE_DIR = "data/documents"
 _MODELS_DIR = "models/lsi"
 _RAW_DIR = Path("data/raw")
+
+
+def extract_snippet(text: str, query: str, length: int = 200) -> str:
+    """Return a query-aware excerpt from text."""
+    clean = text.replace("\n", " ")
+    terms = [t.lower() for t in query.split() if len(t) > 2]
+    if not terms or len(clean) <= length:
+        snippet = clean[:length]
+        return snippet + "…" if len(clean) > length else snippet
+
+    lower = clean.lower()
+    best_pos, best_score = 0, -1
+    for i in range(0, len(clean) - length + 1, 30):
+        score = sum(lower[i : i + length].count(t) for t in terms)
+        if score > best_score:
+            best_score, best_pos = score, i
+
+    start = best_pos
+    end = min(start + length, len(clean))
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(clean) else ""
+    return prefix + clean[start:end].strip() + suffix
 
 _PROFILE_MAP: dict[str, UserProfileType] = {
     "paciente": UserProfileType.PATIENT,
@@ -151,11 +171,15 @@ class Pipeline:
             primary=self.lsi,
             fallback=_internet,
             min_results=3,
+            min_score=0.35,  # trigger web fallback when LSI top result scores below 35%
         )
         self.context = RetrievalContext(strategy=self.retriever)
-        # Wire the hybrid re-ranker into RAG so retrieved docs are reordered
-        # (BM25 + LSI) before the answer is generated.
-        self.rag_service = RAGService(ranker=HybridRanker())
+        # The hybrid re-ranker (BM25 + LSI) is a first-class pipeline stage: it
+        # runs between the post_retrieval and post_ranking hooks (see retrieve()),
+        # exactly as the microkernel flow documents. RAGService therefore receives
+        # already-ranked documents and does not re-rank them itself.
+        self.ranker = HybridRanker()
+        self.rag_service = RAGService()
         # Microkernel: plugins are registered in build() once the vocabulary
         # the expansion plugin needs is available. Empty here = no-op pipeline.
         self.plugins = PluginPipeline()
@@ -184,8 +208,14 @@ class Pipeline:
         print("done")
 
         if self._model_exists():
-            self._warm_start()
-            return
+            try:
+                self._warm_start()
+                return
+            except Exception as exc:
+                # A saved model that fails to load (corrupt/incompatible artifacts,
+                # renamed files, etc.) must not crash startup — fall back to a clean
+                # cold start that rebuilds everything from the corpus.
+                print(f"failed ({exc}); falling back to cold start", file=sys.stderr)
 
         self._cold_start()
 
@@ -199,15 +229,22 @@ class Pipeline:
         )
         self.retriever.primary = self.lsi
 
-        # Restore spell checker vocabulary so query correction works
-        vocab_path = Path(_MODELS_DIR) / "vocab.joblib"
-        if vocab_path.exists():
-            vocab: list[str] = joblib.load(vocab_path)
-            for term in vocab:
-                self.text_processor.spell_checker._insert(term)
+        # Restore spell checker vocabulary so query correction works. The fitted
+        # vocabulary is already persisted inside tfidf.joblib and restored by
+        # LSIRetriever.load(), so we read it straight from the loaded processor —
+        # no separate vocab artifact needed.
+        for term in self.lsi.tfidf.vocabulary:
+            self.text_processor.spell_checker._insert(term)
 
         n_docs = self.repository.collection.count()
         print(f"done  [{n_docs} docs in vector DB]")
+
+        # Dynamic indexing: fold in any documents added to data/raw/ since the
+        # last full fit, without re-fitting the SVD (Conf_2 "Incremental" path).
+        self._fold_in_new_documents()
+
+        # Plugins depend on the fitted vocabulary, now available after load().
+        self._register_plugins()
 
     def _cold_start(self) -> None:
         """Parse corpus, fit LSI, persist artifacts for future warm starts."""
@@ -239,18 +276,68 @@ class Pipeline:
         print("  saving model to disk...", end=" ", flush=True)
         Path(_MODELS_DIR).mkdir(parents=True, exist_ok=True)
         self.lsi.save(_MODELS_DIR)
-        joblib.dump(self.corpus.vocabulary, Path(_MODELS_DIR) / "vocab.joblib")
         print("done  (future startups will be fast)")
 
         # Register optional plugins now that the fitted vocabulary is available.
-        # The expansion plugin needs it to filter expanded terms to ones the
-        # TF-IDF model actually knows.
+        self._register_plugins()
+
+    def _register_plugins(self) -> None:
+        """Register optional pipeline plugins once the fitted vocabulary exists.
+
+        Called from both cold and warm start so query expansion is always active,
+        not just on the first ever run. The expansion plugin needs the fitted
+        vocabulary to filter expanded terms to ones the TF-IDF model knows.
+
+        Idempotent: the plugin pipeline is rebuilt from scratch on every call, so
+        a warm start that also rebalances (which cold-starts internally) does not
+        end up registering the same plugin twice.
+        """
+        self.plugins = PluginPipeline()
         self.plugins.register(
             QueryExpansionPlugin(target_vocabulary=self.lsi.tfidf.vocabulary)
         )
 
+    def _fold_in_new_documents(self) -> None:
+        """Incrementally index documents added to data/raw/ since the last fit.
+
+        Detects raw documents whose source id is not yet represented in the
+        document store, folds them into the existing latent space via
+        :meth:`LSIRetriever.add_documents` (no SVD re-fit), and triggers a full
+        rebuild when too many documents have been folded in (the "balanceo" step).
+        A no-op when data/raw/ has no new documents.
+        """
+        raw_docs = _load_from_raw_dir()
+        if not raw_docs:
+            return
+
+        # Stored ids are chunk ids ("<original>__chunk_<i>"); map back to the
+        # original document id to compare against the raw corpus.
+        indexed_originals = {
+            stored_id.split("__chunk_")[0]
+            for stored_id in self.document_store.list_all_ids()
+        }
+        new_docs = [d for d in raw_docs if d.doc_id not in indexed_originals]
+        if not new_docs:
+            return
+
+        print(f"  folding in {len(new_docs)} new document(s)...", end=" ", flush=True)
+        new_corpus = self.indexer.build(new_docs)
+        added = self.lsi.add_documents(new_corpus)
+        print(f"done  [+{added} chunks]")
+
+        if self.lsi.needs_rebalance():
+            print(
+                f"  incremental fraction {self.lsi.incremental_fraction:.0%} exceeds "
+                "threshold — rebalancing (full refit)..."
+            )
+            self._cold_start()
+
     def retrieve(
-        self, query_text: str, top_k: int = 5, user_profile: UserProfile | None = None
+        self,
+        query_text: str,
+        top_k: int = 5,
+        user_profile: UserProfile | None = None,
+        force_web: bool = False,
     ) -> tuple[list, object | None]:
         """Run the full query pipeline and return retrieved documents and RAG response.
 
@@ -261,13 +348,37 @@ class Pipeline:
         query_corpus = self.indexer.build_query(query_text)
         query = Query(text=query_text, indexed_corpus=query_corpus, user_profile=user_profile)
 
-        # pre_retrieval hook: plugins (e.g. query expansion) may rewrite the
-        # query's indexed_corpus before the retriever runs.
+        # Microkernel flow (each hook is a no-op when no plugin is registered):
+        #   pre_retrieval → retriever → post_retrieval → ranker → post_ranking → RAG
         context = PipelineContext(query=query)
+
+        # pre_retrieval: plugins (e.g. query expansion) may rewrite the query's
+        # indexed_corpus before the retriever runs.
         context = self.plugins.run_hook("pre_retrieval", context)
         query = context.query
 
-        results = self.context.execute_search(query, top_k=top_k)
+        # Honour the UI toggle: temporarily lower min_results so the fallback
+        # fires regardless of how many local results the LSI returned.
+        original_min = self.retriever.min_results
+        if force_web:
+            self.retriever.min_results = top_k + 1
+
+        # Retrieval.
+        context.results = self.context.execute_search(query, top_k=top_k)
+
+        if force_web:
+            self.retriever.min_results = original_min
+
+        # post_retrieval: plugins act on the raw retrieved set before ranking.
+        context = self.plugins.run_hook("post_retrieval", context)
+
+        # Ranking is a first-class stage: re-rank (BM25 + LSI) before generation.
+        if context.results:
+            context.results = self.ranker.rerank(query, context.results)
+
+        # post_ranking: plugins act on the final ordering before answer generation.
+        context = self.plugins.run_hook("post_ranking", context)
+        results = context.results
 
         rag_response = None
         if results:
@@ -298,7 +409,7 @@ def _print_results(results: list, query_text: str) -> None:
     for i, r in enumerate(results, start=1):
         title = r.document.metadata.get("title", r.document.doc_id)
         url = r.document.url or "(no url)"
-        snippet = r.document.text[:120].replace("\n", " ") + "..."
+        snippet = extract_snippet(r.document.text, query_text, length=200)
         print(f"\n  {i}. [{r.score:.3f}] {title}")
         print(f"       {url}")
         print(f"       {snippet}")
@@ -405,6 +516,20 @@ def main() -> None:
     parser.add_argument("--query", "-q", help="Run a single query and exit")
     parser.add_argument("--stats", action="store_true", help="Print corpus stats and exit")
     parser.add_argument(
+        "--eval", action="store_true",
+        help="Evaluate the LSI retriever against the bundled test collection "
+             "(P@k, R@k, F1, NDCG, MAP, MRR) and exit",
+    )
+    parser.add_argument(
+        "--eval-k", type=int, default=10, metavar="K",
+        help="Cut-off rank for the @k evaluation metrics (default: 10)",
+    )
+    parser.add_argument(
+        "--rerank", action="store_true",
+        help="With --eval, apply the HybridRanker (BM25+LSI) before scoring "
+             "to compare against pure LSI",
+    )
+    parser.add_argument(
         "--top-k", type=int, default=5, metavar="K",
         help="Number of results to return (default: 5)",
     )
@@ -434,12 +559,40 @@ def main() -> None:
         name="Paciente",
     )
 
-    if args.stats:
+    if args.eval:
+        _run_evaluation(pipeline, k=args.eval_k, rerank=args.rerank)
+    elif args.stats:
         _print_stats(pipeline.stats())
     elif args.query:
         run_oneshot(pipeline, args.query, user_profile=user_profile)
     else:
         run_interactive(pipeline, user_profile=user_profile)
+
+
+def _run_evaluation(pipeline: Pipeline, k: int, rerank: bool) -> None:
+    """Evaluate the pure LSI retriever against the bundled test collection.
+
+    Reuses the evaluation module's machinery so the CLI metrics match
+    ``python -m modules.evaluation.service``. The pipeline's own HybridRanker is
+    passed through when ``rerank`` is set, so the comparison reflects the live
+    ranking stage rather than a freshly constructed one.
+    """
+    from modules.evaluation.dataset import load_dataset
+    from modules.evaluation.service import EvaluationService, _build_lsi_search_fn
+
+    print("[eval] loading bundled test collection...")
+    dataset = load_dataset(
+        "data/evaluation/eval_queries.json",
+        "data/evaluation/eval_qrels.json",
+    )
+    ranker = pipeline.ranker if rerank else None
+    if rerank:
+        print("[eval] re-ranking enabled (HybridRanker BM25+LSI)")
+
+    print(f"[eval] running evaluation (k={k})...\n")
+    service = EvaluationService(_build_lsi_search_fn(pipeline, ranker=ranker), k=k)
+    report = service.evaluate(dataset)
+    print(report.format_table())
 
 
 if __name__ == "__main__":

@@ -26,9 +26,22 @@ Usage:
 from __future__ import annotations
 
 import logging
+import re
 
 from core.interfaces import BaseRetriever, IndexedCorpus
 from core.models import Query, RetrievedDocument
+
+# Triggers that indicate the query needs current information beyond the corpus.
+_RECENCY_RE = re.compile(
+    r'\b20(2[0-9])\b'                          # year 2020–2029
+    r'|última\s+hora|últim[oa]s?\s+\w+'         # "última hora", "últimas noticias"
+    r'|nuevo\s+estudio|nuevos?\s+tratamiento'   # "nuevo estudio", "nuevo tratamiento"
+    r'|recientemente|reciente[s]?'              # "recientemente", "recientes"
+    r'|\bhoy\b|\bactual(es|mente)?\b'           # "hoy", "actual", "actualmente"
+    r'|\bvigente[s]?\b|\bmoderno[s]?\b'
+    r'|\bactualizado[s]?\b|\bactualizada[s]?\b|\bactualización\b',
+    re.IGNORECASE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +51,9 @@ class FallbackRetriever(BaseRetriever):
 
     Strategy:
         1. Run the primary retriever (e.g., LSI) with the full ``top_k`` budget.
-        2. If the number of results is below ``min_results``, run the fallback
-           (e.g., internet search) to supplement.
+        2. If the number of results is below ``min_results`` OR the best score
+           is below ``min_score``, run the fallback (e.g., internet search)
+           to supplement.
         3. Merge results, deduplicate by ``doc_id`` (keeping the higher score),
            sort by score descending, and return up to ``top_k`` documents.
 
@@ -53,6 +67,10 @@ class FallbackRetriever(BaseRetriever):
         min_results: Threshold below which the fallback is triggered.
             If ``primary`` returns fewer than this many documents, ``fallback``
             is also called and its results are merged in.
+        min_score: Minimum relevance score for the top primary result.
+            If the best local result scores below this threshold the fallback
+            is triggered even when ``min_results`` documents were found.
+            Defaults to 0.0 (disabled).
     """
 
     def __init__(
@@ -60,6 +78,7 @@ class FallbackRetriever(BaseRetriever):
         primary: BaseRetriever,
         fallback: BaseRetriever,
         min_results: int = 3,
+        min_score: float = 0.0,
     ) -> None:
         """Initialize with a primary and fallback retriever.
 
@@ -69,10 +88,14 @@ class FallbackRetriever(BaseRetriever):
                 (e.g., ``InternetSearchRetriever``).
             min_results: Minimum number of results from ``primary`` before the
                 fallback is skipped. Defaults to 3.
+            min_score: Minimum score the top primary result must reach. If the
+                best result scores below this value the fallback is triggered.
+                Defaults to 0.0 (score threshold disabled).
         """
         self.primary = primary
         self.fallback = fallback
         self.min_results = min_results
+        self.min_score = min_score
 
     def fit(self, corpus: IndexedCorpus) -> None:
         """Fit the primary retriever on the given corpus.
@@ -100,19 +123,25 @@ class FallbackRetriever(BaseRetriever):
         # Phase 1: primary retrieval
         primary_results = self._run_primary(query, top_k)
 
-        if len(primary_results) >= self.min_results:
+        top_score = primary_results[0].score if primary_results else 0.0
+        below_count = len(primary_results) < self.min_results
+        below_score = self.min_score > 0.0 and top_score < self.min_score
+        # Corpus textbooks are pre-2020; queries about current info need web supplement.
+        recent_query = bool(_RECENCY_RE.search(query.text))
+
+        if not below_count and not below_score and not recent_query:
             logger.debug(
-                "FallbackRetriever: primary returned %d results (>= min_results=%d), "
+                "FallbackRetriever: primary returned %d results (top_score=%.4f), "
                 "skipping fallback for query='%s'",
-                len(primary_results), self.min_results, query.text,
+                len(primary_results), top_score, query.text,
             )
             return primary_results[:top_k]
 
         # Phase 2: fallback retrieval
         logger.info(
-            "FallbackRetriever: primary returned %d results (< min_results=%d), "
-            "activating fallback for query='%s'",
-            len(primary_results), self.min_results, query.text,
+            "FallbackRetriever: primary returned %d results (top_score=%.4f, "
+            "below_count=%s, below_score=%s, recent_query=%s), activating fallback for query='%s'",
+            len(primary_results), top_score, below_count, below_score, recent_query, query.text,
         )
         fallback_results = self._run_fallback(query, top_k)
 

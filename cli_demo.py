@@ -147,6 +147,28 @@ _BANNER = """
 ╚══════════════════════════════════════════════════╝"""
 
 
+def extract_snippet(text: str, query: str, length: int = 200) -> str:
+    """Return a query-aware excerpt from text."""
+    clean = text.replace("\n", " ")
+    terms = [t.lower() for t in query.split() if len(t) > 2]
+    if not terms or len(clean) <= length:
+        snippet = clean[:length]
+        return snippet + "…" if len(clean) > length else snippet
+
+    lower = clean.lower()
+    best_pos, best_score = 0, -1
+    for i in range(0, len(clean) - length + 1, 30):
+        score = sum(lower[i : i + length].count(t) for t in terms)
+        if score > best_score:
+            best_score, best_pos = score, i
+
+    start = best_pos
+    end = min(start + length, len(clean))
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(clean) else ""
+    return prefix + clean[start:end].strip() + suffix
+
+
 def _print_results(results: list, query_text: str) -> None:
     if not results:
         print(f"\n  No results found for: '{query_text}'")
@@ -155,7 +177,7 @@ def _print_results(results: list, query_text: str) -> None:
     for i, r in enumerate(results, start=1):
         title = r.document.metadata.get("title", r.document.doc_id)
         url = r.document.url or "(no url)"
-        snippet = r.document.text[:120].replace("\n", " ") + "..."
+        snippet = extract_snippet(r.document.text, query_text, length=200)
         print(f"\n  {i}. [{r.score:.3f}] {title}")
         print(f"       {url}")
         print(f"       {snippet}")

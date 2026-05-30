@@ -23,6 +23,36 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from core.models import UserProfile, UserProfileType
 from cli import Pipeline
+from modules.evaluation.service import EvaluationService, _build_lsi_search_fn
+from modules.evaluation.dataset import load_dataset
+
+
+def extract_snippet(text: str, query: str, length: int = 300) -> str:
+    """Return a query-aware excerpt from text.
+
+    Slides a window over the text and picks the position where the most
+    query terms appear, then returns a fragment of `length` characters
+    centred on that position.
+    """
+    clean = text.replace("\n", " ")
+    terms = [t.lower() for t in query.split() if len(t) > 2]
+    if not terms or len(clean) <= length:
+        snippet = clean[:length]
+        return snippet + "…" if len(clean) > length else snippet
+
+    lower = clean.lower()
+    best_pos, best_score = 0, -1
+    for i in range(0, len(clean) - length + 1, 30):
+        score = sum(lower[i : i + length].count(t) for t in terms)
+        if score > best_score:
+            best_score, best_pos = score, i
+
+    start = best_pos
+    end = min(start + length, len(clean))
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(clean) else ""
+    return prefix + clean[start:end].strip() + suffix
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic models for API requests/responses
@@ -32,6 +62,7 @@ class QueryRequest(BaseModel):
     query: str
     profile: str = "paciente"
     top_k: int = 5
+    force_web: bool = False
 
 
 class DocumentResult(BaseModel):
@@ -39,12 +70,21 @@ class DocumentResult(BaseModel):
     source: str
     snippet: str
     relevance: float
+    source_type: str = "local"  # "local" or "web"
 
 
 class QueryResponse(BaseModel):
     results: list[DocumentResult]
     rag_response: str
     query_time_ms: int
+    corrected_query: str | None = None
+    used_web_fallback: bool = False
+
+
+class EvalResponse(BaseModel):
+    aggregated: dict[str, float]
+    k: int
+    num_queries: int
 
 
 class ProfileOption(BaseModel):
@@ -111,22 +151,35 @@ def query_endpoint(req: QueryRequest) -> QueryResponse:
         query_text=req.query,
         top_k=req.top_k,
         user_profile=user_profile,
+        force_web=req.force_web,
     )
 
     # Convert results to JSON-serializable format
     doc_results = []
     for result in (results or []):
         title = result.document.metadata.get("title", result.document.doc_id)
-        snippet = result.document.text[:150].replace("\n", " ")
-        if len(snippet) >= 150:
-            snippet += "..."
+        snippet = extract_snippet(result.document.text, req.query, length=300)
 
+        source_type = result.document.metadata.get("origin", "local")
         doc_results.append(DocumentResult(
             title=title,
             source=result.document.url or "(sin URL)",
             snippet=snippet,
             relevance=float(result.score),
+            source_type=source_type,
         ))
+
+    used_web_fallback = any(r.source_type == "web" for r in doc_results)
+
+    # Detect spell correction by re-running build_query (no side effects post-fit)
+    corrected_query: str | None = None
+    try:
+        query_corpus = _pipeline.indexer.build_query(req.query)
+        corrected = query_corpus.corrected_text
+        if corrected and corrected.strip() != req.query.strip().lower():
+            corrected_query = corrected
+    except Exception:
+        pass
 
     # Extract RAG response text
     rag_text = ""
@@ -139,6 +192,37 @@ def query_endpoint(req: QueryRequest) -> QueryResponse:
         results=doc_results,
         rag_response=rag_text,
         query_time_ms=elapsed_ms,
+        corrected_query=corrected_query,
+        used_web_fallback=used_web_fallback,
+    )
+
+
+@app.get("/api/document")
+def serve_document(path: str) -> FileResponse:
+    """Serve a local document file so the browser can open it."""
+    resolved = (_PROJECT_ROOT / path).resolve()
+    allowed_root = (_PROJECT_ROOT / "data").resolve()
+    if not str(resolved).startswith(str(allowed_root)):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(str(resolved))
+
+
+@app.get("/api/eval")
+def eval_endpoint(k: int = 10) -> EvalResponse:
+    """Run the bundled evaluation dataset against the LSI retriever."""
+    data_dir = _PROJECT_ROOT / "data" / "evaluation"
+    dataset = load_dataset(
+        str(data_dir / "eval_queries.json"),
+        str(data_dir / "eval_qrels.json"),
+    )
+    search_fn = _build_lsi_search_fn(_pipeline)
+    report = EvaluationService(search_fn, k=k).evaluate(dataset)
+    return EvalResponse(
+        aggregated=report.aggregated,
+        k=report.k,
+        num_queries=len(report.per_query),
     )
 
 

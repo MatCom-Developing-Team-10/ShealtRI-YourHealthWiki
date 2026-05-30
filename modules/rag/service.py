@@ -171,7 +171,7 @@ class RAGService(BaseRAG):
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 top_p=0.9,
-                max_tokens=512,
+                max_tokens=1024,
             )
             answer = response.choices[0].message.content or ""
             answer = answer.strip()

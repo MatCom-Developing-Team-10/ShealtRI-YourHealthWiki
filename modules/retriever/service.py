@@ -12,7 +12,7 @@ Retrieval flow:
 from __future__ import annotations
 
 from core.interfaces import BaseRetriever, BaseRepository, DocumentStore, IndexedCorpus
-from core.models import Query, RetrievedDocument
+from core.models import Document, Query, RetrievedDocument
 
 from .lsi_model import LSIModel
 from .tfidf_processor import TfidfProcessor
@@ -153,17 +153,33 @@ class LSIRetriever(BaseRetriever):
             return 0
 
         # Folding-in: TF-IDF with fixed vocabulary/IDF, then project onto the
-        # existing latent space (no SVD re-fit).
+        # existing latent space (no SVD re-fit). Row i of the matrix (and of the
+        # resulting embeddings) aligns positionally with corpus.documents[i].
         tfidf_matrix = self.tfidf.transform_corpus(corpus)
         embeddings = self.model.project_documents(tfidf_matrix)
 
+        # Defense-in-depth: only append genuinely new documents. ChromaDB.add
+        # upserts, so re-adding an existing id would silently overwrite its
+        # well-fitted vector with an inferior folded-in approximation. Filtering
+        # by position keeps each document aligned with its embedding row.
+        new_documents: list[Document] = []
+        new_embeddings: list[list[float]] = []
+        for doc, embedding in zip(corpus.documents, embeddings):
+            if self.document_store.exists(doc.doc_id):
+                continue
+            new_documents.append(doc)
+            new_embeddings.append(embedding)
+
+        if not new_documents:
+            return 0
+
         # Append to both stores (ChromaDB.add is incremental — existing vectors
         # are untouched).
-        self.document_store.add_documents(corpus.documents)
-        self.repository.add_documents(corpus.documents, embeddings=embeddings)
+        self.document_store.add_documents(new_documents)
+        self.repository.add_documents(new_documents, embeddings=new_embeddings)
 
-        self._incremental_doc_count += len(corpus.documents)
-        return len(corpus.documents)
+        self._incremental_doc_count += len(new_documents)
+        return len(new_documents)
 
     @property
     def incremental_fraction(self) -> float:
