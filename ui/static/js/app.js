@@ -165,6 +165,7 @@ function renderResults(results) {
         const sourceType = result.source_type || 'local';
         const sourceLabel = sourceType === 'web' ? 'Web' : 'Local';
 
+        // Title row (innerHTML is safe here — values are escaped)
         card.innerHTML = `
             <div class="result-title">
                 <span>${escapeHtml(result.title)}</span>
@@ -173,9 +174,32 @@ function renderResults(results) {
                     <span class="result-relevance">${relevancePercent}%</span>
                 </div>
             </div>
-            <div class="result-source">${escapeHtml(result.source)}</div>
-            <div class="result-snippet">${escapeHtml(result.snippet)}</div>
         `;
+
+        // Source — DOM element so Firefox treats it as a real anchor
+        const src = (result.source || '').trim();
+        const isWebUrl = /^https?:\/\//i.test(src);
+        const isLocalPath = src && !isWebUrl && src !== '(sin URL)';
+        const hasLink = isWebUrl || isLocalPath;
+        const sourceEl = document.createElement(hasLink ? 'a' : 'div');
+        sourceEl.className = 'result-source';
+        sourceEl.textContent = src || '(sin URL)';
+        if (isWebUrl) {
+            sourceEl.href = src;
+            sourceEl.target = '_blank';
+            sourceEl.rel = 'noopener noreferrer';
+        } else if (isLocalPath) {
+            sourceEl.href = `/api/document?path=${encodeURIComponent(src)}`;
+            sourceEl.target = '_blank';
+            sourceEl.rel = 'noopener noreferrer';
+        }
+        card.appendChild(sourceEl);
+
+        // Snippet
+        const snippetEl = document.createElement('div');
+        snippetEl.className = 'result-snippet';
+        snippetEl.textContent = result.snippet;
+        card.appendChild(snippetEl);
 
         container.appendChild(card);
     });
