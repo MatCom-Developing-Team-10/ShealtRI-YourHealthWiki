@@ -19,22 +19,22 @@
                     </span>
                     <span class="nav-label">Enciclopedia</span>
                 </div>
-                <div class="nav-item">
+                <button id="nav-historial" class="nav-item nav-item-btn">
                     <span class="nav-icon">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
                         </svg>
                     </span>
                     <span class="nav-label">Historial</span>
-                </div>
-                <div class="nav-item">
+                </button>
+                <button id="nav-biblioteca" class="nav-item nav-item-btn">
                     <span class="nav-icon">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>
                         </svg>
                     </span>
                     <span class="nav-label">Biblioteca</span>
-                </div>
+                </button>
                 <div class="nav-item">
                     <span class="nav-icon">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -71,6 +71,34 @@
                     aria-label="Search medical information"
                 >
                 <button id="search-btn" class="search-btn">Buscar</button>
+            </div>
+            <div class="search-options">
+                <label class="web-toggle" id="web-toggle-label">
+                    <input type="checkbox" id="force-web-toggle">
+                    <span class="web-toggle-track"><span class="web-toggle-thumb"></span></span>
+                    <svg class="web-toggle-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="2" y1="12" x2="22" y2="12"/>
+                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                    </svg>
+                    Incluir resultados web
+                </label>
+            </div>
+
+            <div id="spell-hint" class="spell-hint" hidden></div>
+            <div id="results-meta" class="results-meta" hidden></div>
+            <div id="web-fallback-banner" class="web-fallback-banner" hidden>
+                Resultados complementados con búsqueda web
+            </div>
+
+            <!-- Historial overlay -->
+            <div id="historial-panel" class="historial-panel" hidden>
+                <div class="historial-header">
+                    <span>Búsquedas recientes</span>
+                    <button id="historial-close" class="historial-close" aria-label="Cerrar historial">✕</button>
+                </div>
+                <div id="historial-list" class="historial-list"></div>
             </div>
 
             <div id="results-container" class="results-container">
@@ -128,6 +156,7 @@
         </aside>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/marked@13/marked.min.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 </html>

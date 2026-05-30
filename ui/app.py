@@ -23,6 +23,8 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from core.models import UserProfile, UserProfileType
 from cli import Pipeline
+from modules.evaluation.service import EvaluationService, _build_lsi_search_fn
+from modules.evaluation.dataset import load_dataset
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic models for API requests/responses
@@ -32,6 +34,7 @@ class QueryRequest(BaseModel):
     query: str
     profile: str = "paciente"
     top_k: int = 5
+    force_web: bool = False
 
 
 class DocumentResult(BaseModel):
@@ -39,12 +42,21 @@ class DocumentResult(BaseModel):
     source: str
     snippet: str
     relevance: float
+    source_type: str = "local"  # "local" or "web"
 
 
 class QueryResponse(BaseModel):
     results: list[DocumentResult]
     rag_response: str
     query_time_ms: int
+    corrected_query: str | None = None
+    used_web_fallback: bool = False
+
+
+class EvalResponse(BaseModel):
+    aggregated: dict[str, float]
+    k: int
+    num_queries: int
 
 
 class ProfileOption(BaseModel):
@@ -111,6 +123,7 @@ def query_endpoint(req: QueryRequest) -> QueryResponse:
         query_text=req.query,
         top_k=req.top_k,
         user_profile=user_profile,
+        force_web=req.force_web,
     )
 
     # Convert results to JSON-serializable format
@@ -121,12 +134,26 @@ def query_endpoint(req: QueryRequest) -> QueryResponse:
         if len(snippet) >= 150:
             snippet += "..."
 
+        source_type = result.document.metadata.get("origin", "local")
         doc_results.append(DocumentResult(
             title=title,
             source=result.document.url or "(sin URL)",
             snippet=snippet,
             relevance=float(result.score),
+            source_type=source_type,
         ))
+
+    used_web_fallback = any(r.source_type == "web" for r in doc_results)
+
+    # Detect spell correction by re-running build_query (no side effects post-fit)
+    corrected_query: str | None = None
+    try:
+        query_corpus = _pipeline.indexer.build_query(req.query)
+        corrected = query_corpus.corrected_text
+        if corrected and corrected.strip() != req.query.strip().lower():
+            corrected_query = corrected
+    except Exception:
+        pass
 
     # Extract RAG response text
     rag_text = ""
@@ -139,6 +166,25 @@ def query_endpoint(req: QueryRequest) -> QueryResponse:
         results=doc_results,
         rag_response=rag_text,
         query_time_ms=elapsed_ms,
+        corrected_query=corrected_query,
+        used_web_fallback=used_web_fallback,
+    )
+
+
+@app.get("/api/eval")
+def eval_endpoint(k: int = 10) -> EvalResponse:
+    """Run the bundled evaluation dataset against the LSI retriever."""
+    data_dir = _PROJECT_ROOT / "data" / "evaluation"
+    dataset = load_dataset(
+        str(data_dir / "eval_queries.json"),
+        str(data_dir / "eval_qrels.json"),
+    )
+    search_fn = _build_lsi_search_fn(_pipeline)
+    report = EvaluationService(search_fn, k=k).evaluate(dataset)
+    return EvalResponse(
+        aggregated=report.aggregated,
+        k=report.k,
+        num_queries=len(report.per_query),
     )
 
 

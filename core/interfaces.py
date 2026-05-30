@@ -34,6 +34,7 @@ class IndexedCorpus:
     processed_texts: list[str]
     inverted_index: dict[str, list[tuple[int, int]]]
     vocabulary: list[str]
+    corrected_text: str | None = None
 
     def __post_init__(self) -> None:
         if len(self.documents) != len(self.processed_texts):

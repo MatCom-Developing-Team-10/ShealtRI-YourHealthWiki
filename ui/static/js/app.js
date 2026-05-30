@@ -2,8 +2,13 @@
  * ShealtRI UI — JavaScript application logic
  * - Avatar state machine (greetings → idle → responding)
  * - Search query execution
- * - Results rendering
- * - Profile selection
+ * - Results rendering with source badges
+ * - RAG markdown rendering via marked.js
+ * - Spell correction hint
+ * - Query time display
+ * - Web fallback indicator
+ * - Evaluation metrics section (Biblioteca nav)
+ * - Query history via localStorage (Historial nav)
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -22,25 +27,13 @@ const avatarVideos = {
     responding: document.getElementById('avatar-responding'),
 };
 
-// Videos to randomly select from for "responding" state
-const respondingVariants = [
-    '/static/videos/responding.mp4',
-    '/static/videos/responding_2.mp4',
-    '/static/videos/responding_hard.mp4',
-];
-
 let currentAvatarState = null;
 
-/**
- * Switch avatar to a specific state.
- * @param {string} state - State name: 'idle', 'responding', or 'greetings'
- */
 function setAvatarState(state) {
     if (currentAvatarState === state) {
-        return; // Already in this state
+        return;
     }
 
-    // Hide all videos
     Object.values(avatarVideos).forEach(video => {
         if (video) {
             video.pause();
@@ -56,37 +49,24 @@ function setAvatarState(state) {
 
     videoEl.style.display = 'block';
 
-    // Set loop and autoplay based on state
     if (state === 'greetings') {
         videoEl.loop = false;
-        videoEl.onended = () => {
-            setAvatarState(AvatarStates.IDLE);
-        };
+        videoEl.onended = () => setAvatarState(AvatarStates.IDLE);
     } else if (state === 'idle') {
         videoEl.loop = true;
     } else if (state === 'responding') {
         videoEl.loop = true;
     }
 
-    videoEl.play().catch(err => {
-        console.error(`Failed to play ${state} video:`, err);
-    });
-
+    videoEl.play().catch(err => console.error(`Failed to play ${state} video:`, err));
     currentAvatarState = state;
 }
 
-/**
- * Get the "hard" responding variant (always use during search phase).
- */
 function getRespondingHardVariant() {
     return '/static/videos/responding_hard.mp4';
 }
 
-/**
- * Get a random responding variant (not hard) for the response phase.
- */
 function getRandomRespondingVariant() {
-    // Return either responding.mp4 or responding_2.mp4 (not hard)
     return [
         '/static/videos/responding.mp4',
         '/static/videos/responding_2.mp4',
@@ -99,7 +79,6 @@ function getRandomRespondingVariant() {
 
 let currentProfile = 'paciente';
 
-// Profile metadata: icons (SVG)
 const profileMetadata = {
     paciente: {
         icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
@@ -146,10 +125,7 @@ async function loadProfiles() {
 
             radio.addEventListener('change', () => {
                 currentProfile = profile.slug;
-                // Update UI to show selection
-                document.querySelectorAll('.profile-option').forEach(el => {
-                    el.classList.remove('selected');
-                });
+                document.querySelectorAll('.profile-option').forEach(el => el.classList.remove('selected'));
                 label.classList.add('selected');
             });
 
@@ -175,11 +151,7 @@ function renderResults(results) {
     const container = document.getElementById('results-container');
 
     if (!results || results.length === 0) {
-        container.innerHTML = `
-            <div class="results-placeholder">
-                <p>No se encontraron resultados para esta consulta</p>
-            </div>
-        `;
+        container.innerHTML = '<div class="results-placeholder"><p>No se encontraron resultados para esta consulta</p></div>';
         return;
     }
 
@@ -190,11 +162,16 @@ function renderResults(results) {
         card.className = 'result-card';
 
         const relevancePercent = (result.relevance * 100).toFixed(0);
+        const sourceType = result.source_type || 'local';
+        const sourceLabel = sourceType === 'web' ? 'Web' : 'Local';
 
         card.innerHTML = `
             <div class="result-title">
                 <span>${escapeHtml(result.title)}</span>
-                <span class="result-relevance">${relevancePercent}%</span>
+                <div class="result-badges">
+                    <span class="source-badge source-${escapeHtml(sourceType)}">${sourceLabel}</span>
+                    <span class="result-relevance">${relevancePercent}%</span>
+                </div>
             </div>
             <div class="result-source">${escapeHtml(result.source)}</div>
             <div class="result-snippet">${escapeHtml(result.snippet)}</div>
@@ -209,19 +186,130 @@ function renderRagResponse(text) {
     if (!text || text.trim() === '') {
         container.innerHTML = '<p class="response-placeholder">La respuesta generada aparecerá aquí</p>';
     } else {
-        container.textContent = text;
+        if (typeof marked !== 'undefined' && marked.parse) {
+            container.innerHTML = marked.parse(text);
+        } else {
+            container.innerHTML = escapeHtml(text).replace(/\n/g, '<br>');
+        }
     }
 }
 
 function escapeHtml(text) {
-    const map = {
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#039;',
-    };
-    return text.replace(/[&<>"']/g, m => map[m]);
+    const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+    return String(text).replace(/[&<>"']/g, m => map[m]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Query History (localStorage)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const HISTORY_KEY = 'shealtri_history';
+const HISTORY_MAX = 10;
+
+function saveToHistory(queryText) {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    let history = [];
+    try { history = raw ? JSON.parse(raw) : []; } catch { history = []; }
+
+    // Remove duplicate if exists, then prepend
+    history = history.filter(h => h.text !== queryText);
+    history.unshift({ text: queryText, timestamp: Date.now() });
+    if (history.length > HISTORY_MAX) history = history.slice(0, HISTORY_MAX);
+
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+}
+
+function relativeTime(ts) {
+    const diff = Math.floor((Date.now() - ts) / 1000);
+    if (diff < 60) return 'hace un momento';
+    if (diff < 3600) return `hace ${Math.floor(diff / 60)} min`;
+    if (diff < 86400) return `hace ${Math.floor(diff / 3600)} h`;
+    return `hace ${Math.floor(diff / 86400)} d`;
+}
+
+function renderHistorial() {
+    const panel = document.getElementById('historial-panel');
+    const list = document.getElementById('historial-list');
+    const raw = localStorage.getItem(HISTORY_KEY);
+    let history = [];
+    try { history = raw ? JSON.parse(raw) : []; } catch { history = []; }
+
+    list.innerHTML = '';
+
+    if (history.length === 0) {
+        list.innerHTML = '<p class="historial-empty">No hay búsquedas recientes</p>';
+    } else {
+        history.forEach(item => {
+            const btn = document.createElement('button');
+            btn.className = 'historial-item';
+            btn.innerHTML = `
+                <span class="historial-text">${escapeHtml(item.text)}</span>
+                <span class="historial-time">${relativeTime(item.timestamp)}</span>
+            `;
+            btn.addEventListener('click', () => {
+                document.getElementById('search-input').value = item.text;
+                panel.hidden = true;
+                executeQuery(item.text);
+            });
+            list.appendChild(btn);
+        });
+    }
+
+    panel.hidden = false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Evaluation Metrics (Biblioteca nav)
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _lastResults = null;
+
+async function showEvaluation() {
+    const container = document.getElementById('results-container');
+    const meta = document.getElementById('results-meta');
+    meta.hidden = true;
+    document.getElementById('spell-hint').hidden = true;
+    document.getElementById('web-fallback-banner').hidden = true;
+
+    container.innerHTML = `
+        <div class="results-placeholder">
+            <p>Calculando métricas de evaluación… (puede tardar unos segundos)</p>
+        </div>
+    `;
+
+    try {
+        const response = await fetch('/api/eval?k=10');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+
+        const metrics = data.aggregated;
+        const rows = Object.entries(metrics)
+            .map(([name, val]) => `<tr><td>${escapeHtml(name)}</td><td>${(val * 100).toFixed(2)}%</td></tr>`)
+            .join('');
+
+        container.innerHTML = `
+            <div class="eval-section">
+                <div class="eval-header">
+                    <h3>Evaluación del sistema (k=${data.k}, ${data.num_queries} consultas)</h3>
+                    <button id="eval-back-btn" class="eval-back-btn">← Volver</button>
+                </div>
+                <table class="metrics-table">
+                    <thead><tr><th>Métrica</th><th>Valor</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        `;
+
+        document.getElementById('eval-back-btn').addEventListener('click', () => {
+            if (_lastResults) {
+                renderResults(_lastResults);
+            } else {
+                container.innerHTML = '<div class="results-placeholder"><p>Ingresa una consulta para comenzar</p></div>';
+            }
+        });
+    } catch (err) {
+        container.innerHTML = `<div class="results-placeholder"><p>Error al cargar métricas: ${escapeHtml(err.message)}</p></div>`;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -229,82 +317,93 @@ function escapeHtml(text) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function executeQuery(queryText) {
-    if (!queryText.trim()) {
-        return;
-    }
+    if (!queryText.trim()) return;
 
     const searchBtn = document.getElementById('search-btn');
+    const resultsContainer = document.getElementById('results-container');
+    const spellHint = document.getElementById('spell-hint');
+    const resultsMeta = document.getElementById('results-meta');
+    const webBanner = document.getElementById('web-fallback-banner');
+    const historialPanel = document.getElementById('historial-panel');
+
+    // Hide auxiliary elements at the start
+    spellHint.hidden = true;
+    resultsMeta.hidden = true;
+    webBanner.hidden = true;
+    historialPanel.hidden = true;
+
     searchBtn.classList.add('loading');
     searchBtn.disabled = true;
     searchBtn.textContent = 'Buscando...';
 
-    // Phase 1: Switch to responding_hard during search
-    const respondingHardUrl = getRespondingHardVariant();
+    // Switch avatar to responding_hard during search
     const respondingSource = avatarVideos.responding.querySelector('source');
     if (respondingSource) {
-        respondingSource.src = respondingHardUrl;
+        respondingSource.src = getRespondingHardVariant();
         avatarVideos.responding.load();
-        avatarVideos.responding.play().catch(err => {
-            console.error('Failed to play responding_hard:', err);
-        });
+        avatarVideos.responding.play().catch(() => {});
     }
     setAvatarState(AvatarStates.RESPONDING);
 
-    // Show loading state
-    const resultsContainer = document.getElementById('results-container');
-    resultsContainer.innerHTML = `
-        <div class="results-placeholder">
-            <p>Buscando información...</p>
-        </div>
-    `;
+    resultsContainer.innerHTML = '<div class="results-placeholder"><p>Buscando información...</p></div>';
     renderRagResponse('Generando respuesta...');
 
     try {
         const response = await fetch('/api/query', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 query: queryText,
                 profile: currentProfile,
                 top_k: 5,
+                force_web: document.getElementById('force-web-toggle')?.checked ?? false,
             }),
         });
 
-        if (!response.ok) {
-            throw new Error(`API error: ${response.statusText}`);
-        }
+        if (!response.ok) throw new Error(`API error: ${response.statusText}`);
 
         const data = await response.json();
 
         // Render results
+        _lastResults = data.results;
         renderResults(data.results);
         renderRagResponse(data.rag_response);
 
-        // Phase 2: Switch to responding.mp4 after response is ready
-        const respondingUrl = '/static/videos/responding.mp4';
-        if (respondingSource) {
-            respondingSource.src = respondingUrl;
-            avatarVideos.responding.load();
-            avatarVideos.responding.play().catch(err => {
-                console.error('Failed to play responding:', err);
+        // Query time
+        if (data.query_time_ms != null) {
+            resultsMeta.textContent = `${data.results.length} resultado${data.results.length !== 1 ? 's' : ''} en ${data.query_time_ms} ms`;
+            resultsMeta.hidden = false;
+        }
+
+        // Spell correction hint
+        if (data.corrected_query && data.corrected_query.trim() !== queryText.trim().toLowerCase()) {
+            spellHint.innerHTML = `¿Quisiste decir: <button class="spell-suggestion" data-query="${escapeHtml(data.corrected_query)}">${escapeHtml(data.corrected_query)}</button>?`;
+            spellHint.hidden = false;
+            spellHint.querySelector('.spell-suggestion').addEventListener('click', e => {
+                const q = e.currentTarget.dataset.query;
+                document.getElementById('search-input').value = q;
+                executeQuery(q);
             });
         }
-        // Avatar stays in responding state for 5 seconds
 
-        // Phase 3: After 5 seconds, switch back to idle
-        setTimeout(() => {
-            setAvatarState(AvatarStates.IDLE);
-        }, 5000);
+        // Web fallback banner
+        if (data.used_web_fallback) {
+            webBanner.hidden = false;
+        }
+
+        saveToHistory(queryText);
+
+        // Switch to calmer responding video, then idle after 5 s
+        if (respondingSource) {
+            respondingSource.src = getRandomRespondingVariant();
+            avatarVideos.responding.load();
+            avatarVideos.responding.play().catch(() => {});
+        }
+        setTimeout(() => setAvatarState(AvatarStates.IDLE), 5000);
+
     } catch (err) {
         console.error('Query execution failed:', err);
-        const resultsContainer = document.getElementById('results-container');
-        resultsContainer.innerHTML = `
-            <div class="results-placeholder">
-                <p>Error al ejecutar la búsqueda: ${escapeHtml(err.message)}</p>
-            </div>
-        `;
+        resultsContainer.innerHTML = `<div class="results-placeholder"><p>Error al ejecutar la búsqueda: ${escapeHtml(err.message)}</p></div>`;
         renderRagResponse('');
         setAvatarState(AvatarStates.IDLE);
     } finally {
@@ -319,23 +418,32 @@ async function executeQuery(queryText) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // Load profiles
     await loadProfiles();
 
-    // Set up search input
     const searchInput = document.getElementById('search-input');
     const searchBtn = document.getElementById('search-btn');
 
-    searchBtn.addEventListener('click', () => {
-        executeQuery(searchInput.value);
+    searchBtn.addEventListener('click', () => executeQuery(searchInput.value));
+    searchInput.addEventListener('keypress', e => {
+        if (e.key === 'Enter') executeQuery(searchInput.value);
     });
 
-    searchInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            executeQuery(searchInput.value);
+    document.getElementById('nav-historial').addEventListener('click', () => {
+        const panel = document.getElementById('historial-panel');
+        if (panel.hidden) {
+            renderHistorial();
+        } else {
+            panel.hidden = true;
         }
     });
 
-    // Start with greetings animation
+    document.getElementById('historial-close').addEventListener('click', () => {
+        document.getElementById('historial-panel').hidden = true;
+    });
+
+    document.getElementById('nav-biblioteca').addEventListener('click', () => {
+        showEvaluation();
+    });
+
     setAvatarState(AvatarStates.GREETINGS);
 });

@@ -116,6 +116,7 @@ class TextProcessor:
 
         self._stopwords = self._load_stopwords()
         self.spell_checker: TrieSpellChecker = TrieSpellChecker()
+        self._last_corrections: dict[str, str] = {}
 
         logger.debug(
             f"TextProcessor initialized: language={self.config.language}, "
@@ -259,13 +260,24 @@ class TextProcessor:
         Returns:
             List of tokens with spelling corrections applied.
         """
+        self._last_corrections = {}
         corrected = []
         for token in tokens:
             correction = self.spell_checker.correct(token)
-            # Use correction if found, otherwise keep the original token
-            corrected.append(correction if correction else token)
+            result = correction if correction else token
+            if result != token:
+                self._last_corrections[token] = result
+            corrected.append(result)
 
         return corrected
+
+    def get_last_corrections(self) -> dict[str, str]:
+        """Return corrections made by the most recent _correct_spelling call.
+
+        Returns:
+            Mapping of original_token -> corrected_token for changed tokens only.
+        """
+        return dict(self._last_corrections)
 
     def normalize(self, text: str) -> str:
         """Normalize text by applying lowercase, unicode normalization, and cleaning.

@@ -100,6 +100,7 @@ class InternetSearchRetriever(BaseRetriever):
         results = []
         n = len(documents)
         for rank, doc in enumerate(documents):
+            doc.metadata["origin"] = "web"
             score = 1.0 - (rank / (n + 1))
             results.append(RetrievedDocument(document=doc, score=round(score, 4)))
 
