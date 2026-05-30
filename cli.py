@@ -53,8 +53,6 @@ from modules.web_search import InternetSearchRetriever, WebContentFetcher
 from modules.text_processor.service import TextProcessor
 from modules.rag.service import RAGService
 from plugins.expansion.service import QueryExpansionPlugin
-from tests._synthetic_corpus import RAW_DOCUMENTS
-
 _CHROMA_DIR = "data/chroma"
 _STORE_DIR = "data/documents"
 _MODELS_DIR = "models/lsi"
@@ -123,19 +121,6 @@ def _load_from_raw_dir() -> list[Document] | None:
                 print(f"  [warn] DocumentLoader ({file_path.name}): {e}", file=sys.stderr)
 
     return documents if documents else None
-
-
-def _load_synthetic_documents() -> list[Document]:
-    """Return the 20 built-in synthetic medical documents."""
-    return [
-        Document(
-            doc_id=d["doc_id"],
-            text=d["text"],
-            url=d["url"],
-            metadata={"title": d["title"]},
-        )
-        for d in RAW_DOCUMENTS
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -227,13 +212,15 @@ class Pipeline:
     def _cold_start(self) -> None:
         """Parse corpus, fit LSI, persist artifacts for future warm starts."""
         print("  reading documents from data/raw/...", end=" ", flush=True)
-        real_docs = _load_from_raw_dir()
-        if real_docs:
-            documents = real_docs
-            self._source_label = f"data/raw/ ({len(documents)} docs)"
-        else:
-            documents = _load_synthetic_documents()
-            self._source_label = f"synthetic corpus ({len(documents)} docs)"
+        documents = _load_from_raw_dir()
+        if not documents:
+            raise RuntimeError(
+                "No documents found in data/raw/. The pipeline cannot start "
+                "without a corpus. Drop JSON/JSONL files exported by the "
+                "crawler (or by scripts/ingest_pdfs.py) into data/raw/ and "
+                "try again."
+            )
+        self._source_label = f"data/raw/ ({len(documents)} docs)"
         print("done")
 
         print(f"  source  : {self._source_label}")

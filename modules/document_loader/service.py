@@ -25,15 +25,11 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Type
+from typing import TYPE_CHECKING, Any
 
-from langchain_community.document_loaders import (
-    DirectoryLoader,
-    TextLoader,
-    CSVLoader,
-)
-from langchain_community.document_loaders.base import BaseLoader
-from langchain_core.documents import Document as LCDocument
+if TYPE_CHECKING:
+    from langchain_community.document_loaders.base import BaseLoader
+    from langchain_core.documents import Document as LCDocument
 
 from core.models import Document
 
@@ -48,15 +44,13 @@ class DocumentLoaderError(Exception):
 
 
 class DocumentLoader:
-    """Loads documents from various formats using LangChain loaders.
+    """Loads documents from various formats.
 
-    Supports:
-        - JSON: Structured medical data
-        - HTML: Crawler output, web pages
-        - PDF: Medical articles, papers
-        - TXT: Plain text documents
-        - CSV/TSV: Medical datasets
-        - Markdown: Documentation
+    JSON files are parsed natively (no extra dependency). Other formats
+    (TXT, MD, CSV/TSV, HTML, PDF) are loaded through LangChain on demand —
+    the langchain packages are imported lazily the first time a non-JSON
+    file is encountered, so JSON-only workloads avoid the import cost
+    entirely.
 
     Example:
         loader = DocumentLoader()
@@ -74,27 +68,38 @@ class DocumentLoader:
         docs = loader.load_from_json("data/corpus.json")
     """
 
-    # Mapping of file extensions to loader classes
-    LOADER_MAP: dict[str, Type[BaseLoader]] = {
-        ".txt": TextLoader,
-        ".md": TextLoader,
-        ".csv": CSVLoader,
-        ".tsv": CSVLoader,
-    }
+    LOADER_MAP: dict[str, type[BaseLoader]] = {}
 
     def __init__(self) -> None:
         """Initialize the document loader."""
-        # Try to import optional loaders
-        self._register_optional_loaders()
+        self._loaders_registered = False
 
-    def _register_optional_loaders(self) -> None:
-        """Register loaders that require optional dependencies."""
+    def _ensure_loaders_registered(self) -> None:
+        """Lazily import langchain loaders the first time a non-JSON file is loaded."""
+        if self._loaders_registered:
+            return
+
+        try:
+            from langchain_community.document_loaders import CSVLoader, TextLoader
+        except ImportError:
+            logger.warning(
+                "langchain-community is not installed. Only JSON loading is available. "
+                "Install with: pip install langchain-community"
+            )
+            self._loaders_registered = True
+            return
+
+        self.LOADER_MAP.setdefault(".txt", TextLoader)
+        self.LOADER_MAP.setdefault(".md", TextLoader)
+        self.LOADER_MAP.setdefault(".csv", CSVLoader)
+        self.LOADER_MAP.setdefault(".tsv", CSVLoader)
+
         # HTML loader (requires unstructured)
         try:
             from langchain_community.document_loaders import UnstructuredHTMLLoader
 
-            self.LOADER_MAP[".html"] = UnstructuredHTMLLoader
-            self.LOADER_MAP[".htm"] = UnstructuredHTMLLoader
+            self.LOADER_MAP.setdefault(".html", UnstructuredHTMLLoader)
+            self.LOADER_MAP.setdefault(".htm", UnstructuredHTMLLoader)
         except ImportError:
             logger.warning(
                 "UnstructuredHTMLLoader not available. Install with: pip install unstructured"
@@ -104,9 +109,11 @@ class DocumentLoader:
         try:
             from langchain_community.document_loaders import PyPDFLoader
 
-            self.LOADER_MAP[".pdf"] = PyPDFLoader
+            self.LOADER_MAP.setdefault(".pdf", PyPDFLoader)
         except ImportError:
             logger.warning("PyPDFLoader not available. Install with: pip install pypdf")
+
+        self._loaders_registered = True
 
     def load_from_directory(
         self,
@@ -167,6 +174,7 @@ class DocumentLoader:
             return self._load_json_directory(dir_path, pattern, recursive)
 
         # Get loader class for format
+        self._ensure_loaders_registered()
         ext = f".{format}"
         loader_cls = self.LOADER_MAP.get(ext)
 
@@ -176,7 +184,8 @@ class DocumentLoader:
                 f"Supported: {list(self.LOADER_MAP.keys())}"
             )
 
-        # Use DirectoryLoader
+        from langchain_community.document_loaders import DirectoryLoader
+
         loader = DirectoryLoader(
             str(dir_path),
             glob=pattern if pattern != "**/*" else f"**/*.{format}",
@@ -239,11 +248,11 @@ class DocumentLoader:
         if not path.exists():
             raise DocumentLoaderError(f"File not found: {file_path}")
 
-        # Special handling for JSON (backward compatibility)
+        # JSON is parsed natively — no langchain required.
         if path.suffix == ".json":
             return self.load_from_json(path)
 
-        # Get loader for extension
+        self._ensure_loaders_registered()
         loader_cls = self.LOADER_MAP.get(path.suffix)
 
         if not loader_cls:
@@ -252,7 +261,6 @@ class DocumentLoader:
                 f"Supported: {list(self.LOADER_MAP.keys()) + ['.json']}"
             )
 
-        # Load using LangChain loader
         loader = loader_cls(str(path))
         lc_docs = loader.load()
 
@@ -375,7 +383,7 @@ class DocumentLoader:
             metadata=data.get("metadata", {}),
         )
 
-    def _convert_document(self, lc_doc: LCDocument) -> Document:
+    def _convert_document(self, lc_doc: Any) -> Document:
         """Convert LangChain Document to core.models.Document.
 
         Args:

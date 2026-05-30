@@ -64,3 +64,12 @@ tests/
 # Misc
 LICENSE
 README.md
+
+# Runtime data — mounted as volumes, never baked into the image
+data/
+models/
+logs/
+*.log
+
+# Benchmark / one-off scripts
+scripts/

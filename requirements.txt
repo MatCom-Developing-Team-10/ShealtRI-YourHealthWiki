@@ -1,5 +1,8 @@
-# Core runtime dependencies — Cortes 1 and 2
+# Runtime dependencies — only what the FastAPI app actually loads.
 # ============================================================
+# Anything used only by offline scripts (PDF ingestion, semantic
+# chunking experiments, the crawler) is intentionally NOT listed
+# here so the Docker image stays small and the first build is fast.
 
 # Numerics
 numpy>=1.26.0
@@ -17,25 +20,19 @@ joblib>=1.4.0
 # Vector database
 chromadb>=0.5.0
 
-# RAG & LLM (Corte 2)
-langchain>=0.1.0
-langchain-community>=0.0.0
+# RAG & environment
 python-dotenv>=1.0.0
-groq>=0.11.0                     # Groq API for profile-aware RAG
+groq>=0.11.0                 # Groq API for profile-aware RAG
 
-# Web crawling
+# Web search fallback (DuckDuckGo + page fetch/parse)
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
-ddgs>=0.1.0                  # DuckDuckGo search (no API key) for internet fallback retrieval
-
-# Document parsing
-pypdf>=3.17.0                # PDF loading for digital books corpus
+ddgs>=0.1.0
 
 # Utilities
 python-dateutil>=2.8.0
 pydantic>=2.0.0
 
-# Ranking & retrieval (Corte 3)
+# Ranking
 rank-bm25>=0.2.2             # BM25 scoring for hybrid re-ranking
-sentence-transformers>=3.0.0 # Sentence embeddings for semantic chunking
