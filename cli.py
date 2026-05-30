@@ -186,7 +186,7 @@ class Pipeline:
             primary=self.lsi,
             fallback=_internet,
             min_results=3,
-            min_score=0.15,  # trigger web fallback when LSI top result scores below 15%
+            min_score=0.35,  # trigger web fallback when LSI top result scores below 35%
         )
         self.context = RetrievalContext(strategy=self.retriever)
         # The hybrid re-ranker (BM25 + LSI) is a first-class pipeline stage: it
