@@ -205,6 +205,233 @@ function renderResults(results) {
     });
 }
 
+function buildFeedbackBar(docId) {
+    const bar = document.createElement('div');
+    bar.className = 'feedback-bar';
+    bar.innerHTML = `
+        <span class="feedback-label">¿Te resultó útil?</span>
+        <button class="feedback-btn feedback-up" data-doc="${escapeHtml(docId)}" data-relevant="true" aria-label="Marcar como relevante">👍</button>
+        <button class="feedback-btn feedback-down" data-doc="${escapeHtml(docId)}" data-relevant="false" aria-label="Marcar como no relevante">👎</button>
+        <span class="judgment-count" hidden></span>
+    `;
+    bar.querySelectorAll('.feedback-btn').forEach(btn => {
+        btn.addEventListener('click', () => sendFeedback(btn));
+    });
+    return bar;
+}
+
+async function sendFeedback(btn) {
+    if (!_lastQueryText) return;
+    const docId = btn.dataset.doc;
+    const relevant = btn.dataset.relevant === 'true';
+
+    // Visual feedback first (optimistic) — the call is fire-and-forget for UX.
+    const siblings = btn.parentElement.querySelectorAll('.feedback-btn');
+    siblings.forEach(s => s.classList.remove('feedback-selected'));
+    btn.classList.add('feedback-selected');
+
+    try {
+        const response = await fetch('/api/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: _lastQueryText, doc_id: docId, relevant }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+
+        // Echo back how many judgments this query has accumulated so the user
+        // can see Rocchio is building up evidence.
+        const total = data.total_judgments_for_query;
+        if (typeof total === 'number') {
+            const badge = btn.parentElement.querySelector('.judgment-count');
+            if (badge) {
+                badge.textContent = `Rocchio · ${total} juicio${total !== 1 ? 's' : ''}`;
+                badge.hidden = false;
+            }
+            // Cheap refresh of the global counter in the footer.
+            loadStats();
+        }
+    } catch (err) {
+        console.error('Failed to record feedback:', err);
+        btn.classList.remove('feedback-selected');
+    }
+}
+
+async function loadStats() {
+    try {
+        const response = await fetch('/api/stats');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const s = await response.json();
+        const footer = document.getElementById('stats-footer');
+        footer.innerHTML = `
+            <span>📚 ${s.n_documents.toLocaleString()} documentos · ${s.n_chunks.toLocaleString()} chunks</span>
+            <span>🔤 vocab ${s.n_terms.toLocaleString()}</span>
+            <span>📐 LSI k=${s.lsi_k}</span>
+            <span>📝 ${s.avg_tokens_per_doc.toFixed(0)} tokens/doc</span>
+            <span>👍 ${s.feedback_judgments} juicios Rocchio</span>
+        `;
+        footer.hidden = false;
+    } catch (err) {
+        console.error('Failed to load stats:', err);
+    }
+}
+
+async function fetchRecommendations(seedDocIds, profile, excludeIds = null) {
+    const panel = document.getElementById('recommendations-panel');
+    const list = document.getElementById('recommendations-list');
+
+    if (!seedDocIds || seedDocIds.length === 0) {
+        panel.hidden = true;
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/recommend', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                seed_doc_ids: seedDocIds,
+                top_k: 3,
+                profile: profile,
+                exclude_ids: excludeIds || seedDocIds,
+            }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+
+        if (!data.items || data.items.length === 0) {
+            panel.hidden = true;
+            return;
+        }
+
+        list.innerHTML = data.items.map(item => `
+            <div class="recommendation-card" data-doc="${escapeHtml(item.doc_id)}" data-url="${escapeHtml(item.source)}">
+                <div class="recommendation-title">${escapeHtml(item.title)}</div>
+                <div class="recommendation-snippet">${escapeHtml(item.snippet)}</div>
+                <div class="recommendation-footer">
+                    <span>${escapeHtml(extractSourceLabel(item.source))}</span>
+                    <span class="recommendation-similarity">${(item.similarity * 100).toFixed(0)}% similitud</span>
+                </div>
+            </div>
+        `).join('');
+
+        // Clicking a recommendation opens its URL in a new tab (web) or
+        // serves the local file (local). Reuses the same routing as the
+        // result cards above.
+        list.querySelectorAll('.recommendation-card').forEach(card => {
+            card.addEventListener('click', () => {
+                const url = card.dataset.url;
+                if (url && url !== '(sin URL)') {
+                    if (url.startsWith('http')) {
+                        window.open(url, '_blank', 'noopener');
+                    } else {
+                        window.open(`/api/document?path=${encodeURIComponent(url)}`, '_blank', 'noopener');
+                    }
+                }
+            });
+        });
+
+        panel.hidden = false;
+    } catch (err) {
+        console.error('Failed to fetch recommendations:', err);
+        panel.hidden = true;
+    }
+}
+
+function extractSourceLabel(url) {
+    if (!url || url === '(sin URL)') return 'local';
+    try {
+        const host = new URL(url).hostname.replace(/^www\./, '');
+        return host;
+    } catch {
+        return 'local';
+    }
+}
+
+/**
+ * Render the bidirectional spell-correction hint.
+ *
+ * @param {HTMLElement} hint       The #spell-hint container.
+ * @param {string} typedQuery      Exactly what the user typed.
+ * @param {string|null} correction The available correction, or null/empty.
+ * @param {boolean} applied        Whether retrieval used the correction.
+ *
+ * Two states, mirroring Google:
+ *   - applied  → "Mostrando resultados para «X». Buscar en su lugar «typed»"
+ *                clicking re-runs verbatim (apply_correction = false).
+ *   - !applied → "¿Quisiste decir «X»?"
+ *                clicking re-runs the same query corrected (apply_correction = true).
+ */
+function renderSpellHint(hint, typedQuery, correction, applied) {
+    hint.hidden = true;
+    hint.innerHTML = '';
+
+    const typed = (typedQuery || '').trim();
+    const corrected = (correction || '').trim();
+    if (!corrected || corrected === typed.toLowerCase()) {
+        return;
+    }
+
+    if (applied) {
+        hint.innerHTML = `Mostrando resultados para <strong>${escapeHtml(corrected)}</strong>. `
+            + `Buscar en su lugar: `
+            + `<button class="spell-suggestion" data-query="${escapeHtml(typed)}" data-correct="false">${escapeHtml(typed)}</button>`;
+    } else {
+        hint.innerHTML = `¿Quisiste decir: `
+            + `<button class="spell-suggestion" data-query="${escapeHtml(typed)}" data-correct="true">${escapeHtml(corrected)}</button>?`;
+    }
+    hint.hidden = false;
+
+    hint.querySelector('.spell-suggestion').addEventListener('click', e => {
+        const q = e.currentTarget.dataset.query;
+        const correct = e.currentTarget.dataset.correct === 'true';
+        document.getElementById('search-input').value = q;
+        executeQuery(q, { applyCorrection: correct });
+    });
+}
+
+function renderExpansion(terms) {
+    const hint = document.getElementById('expansion-hint');
+    if (!terms || terms.length === 0) {
+        hint.hidden = true;
+        return;
+    }
+    const chips = terms
+        .map(t => `<span class="expansion-chip">${escapeHtml(t)}</span>`)
+        .join('');
+    hint.innerHTML = `<span class="expansion-prefix">También buscamos:</span> ${chips}`;
+    hint.hidden = false;
+}
+
+function renderRagMeta(usedLlm, modelName) {
+    const meta = document.getElementById('rag-meta');
+    if (!modelName) {
+        meta.hidden = true;
+        return;
+    }
+    const backend = usedLlm ? modelName : 'plantilla (sin LLM)';
+    meta.innerHTML = `<span class="rag-meta-pill">Backend: ${escapeHtml(backend)}</span>`;
+    meta.hidden = false;
+}
+
+function renderRagQuality(quality) {
+    const container = document.getElementById('rag-quality');
+    if (!quality) {
+        container.hidden = true;
+        return;
+    }
+    const labels = {
+        faithfulness: 'Fidelidad',
+        groundedness: 'Anclaje',
+        context_relevance: 'Relevancia del contexto',
+    };
+    const chips = Object.entries(quality)
+        .map(([k, v]) => `<span class="quality-chip" title="${escapeHtml(k)}">${escapeHtml(labels[k] || k)}: ${(v * 100).toFixed(0)}%</span>`)
+        .join('');
+    container.innerHTML = `<div class="quality-label">Calidad RAG</div><div class="quality-chips">${chips}</div>`;
+    container.hidden = false;
+}
+
 function renderRagResponse(text) {
     const container = document.getElementById('rag-response');
     if (!text || text.trim() === '') {
@@ -340,8 +567,20 @@ async function showEvaluation() {
 // Query Execution
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function executeQuery(queryText) {
+async function executeQuery(queryText, options = {}) {
     if (!queryText.trim()) return;
+
+    // Spell-correction choice: an explicit override (from the "did you mean" /
+    // "search verbatim" links) wins; otherwise fall back to the toggle state.
+    const spellToggle = document.getElementById('spell-correct-toggle');
+    const applyCorrection = options.applyCorrection !== undefined
+        ? options.applyCorrection
+        : (spellToggle ? spellToggle.checked : true);
+    // Keep the toggle in sync when an explicit choice was made, so the UI
+    // honestly reflects what the next search will do.
+    if (options.applyCorrection !== undefined && spellToggle) {
+        spellToggle.checked = applyCorrection;
+    }
 
     const searchBtn = document.getElementById('search-btn');
     const resultsContainer = document.getElementById('results-container');
@@ -381,6 +620,7 @@ async function executeQuery(queryText) {
                 profile: currentProfile,
                 top_k: 5,
                 force_web: document.getElementById('force-web-toggle')?.checked ?? false,
+                apply_correction: applyCorrection,
             }),
         });
 
@@ -399,16 +639,10 @@ async function executeQuery(queryText) {
             resultsMeta.hidden = false;
         }
 
-        // Spell correction hint
-        if (data.corrected_query && data.corrected_query.trim() !== queryText.trim().toLowerCase()) {
-            spellHint.innerHTML = `¿Quisiste decir: <button class="spell-suggestion" data-query="${escapeHtml(data.corrected_query)}">${escapeHtml(data.corrected_query)}</button>?`;
-            spellHint.hidden = false;
-            spellHint.querySelector('.spell-suggestion').addEventListener('click', e => {
-                const q = e.currentTarget.dataset.query;
-                document.getElementById('search-input').value = q;
-                executeQuery(q);
-            });
-        }
+        // Spell correction hint — bidirectional (Google-style). The backend
+        // reports both the available correction and whether it was applied,
+        // so the user can always switch to the other interpretation.
+        renderSpellHint(spellHint, queryText, data.corrected_query, data.correction_applied);
 
         // Web fallback banner
         if (data.used_web_fallback) {

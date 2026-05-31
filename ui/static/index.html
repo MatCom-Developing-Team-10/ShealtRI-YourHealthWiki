@@ -73,6 +73,17 @@
                 <button id="search-btn" class="search-btn">Buscar</button>
             </div>
             <div class="search-options">
+                <label class="web-toggle" id="spell-toggle-label" title="Si está activado, corregimos posibles errores ortográficos antes de buscar. Si lo desactivas, buscamos exactamente lo que escribiste.">
+                    <input type="checkbox" id="spell-correct-toggle" checked>
+                    <span class="web-toggle-track"><span class="web-toggle-thumb"></span></span>
+                    <svg class="web-toggle-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M4 7V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/>
+                        <path d="M9 20h6"/><path d="M12 4v16"/>
+                        <path d="M20 12l-2 2-1-1"/>
+                    </svg>
+                    Corregir ortografía
+                </label>
                 <label class="web-toggle" id="web-toggle-label">
                     <input type="checkbox" id="force-web-toggle">
                     <span class="web-toggle-track"><span class="web-toggle-thumb"></span></span>

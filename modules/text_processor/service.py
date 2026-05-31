@@ -150,7 +150,9 @@ class TextProcessor:
 
         return combined
 
-    def process(self, text: str, is_query: bool = False) -> str:
+    def process(
+        self, text: str, is_query: bool = False, apply_correction: bool = True
+    ) -> str:
         """Apply the full preprocessing pipeline to a single text.
 
         Pipeline flow:
@@ -159,6 +161,7 @@ class TextProcessor:
             3. Remove stopwords (by surface form) and filter by length
             4. If is_query=False: add tokens to spell checker vocabulary
                If is_query=True: correct tokens using known vocabulary
+               (unless apply_correction=False, see below)
 
         For indexing many documents at once, prefer :meth:`process_many`, which
         batches the spaCy pipeline and is substantially faster.
@@ -167,13 +170,24 @@ class TextProcessor:
             text: Raw input text.
             is_query: If False, tokens are added to spell checker vocabulary.
                       If True, tokens are corrected using the vocabulary.
+            apply_correction: Only relevant when ``is_query=True``. When False,
+                the query is processed verbatim (lemmatized/filtered as usual)
+                but spell correction is skipped, so the user's original wording
+                is preserved. Ignored on the indexing path.
 
         Returns:
             Space-joined preprocessed tokens ready for indexer.
         """
-        return self.process_many([text], is_query=is_query)[0]
+        return self.process_many(
+            [text], is_query=is_query, apply_correction=apply_correction
+        )[0]
 
-    def process_many(self, texts: list[str], is_query: bool = False) -> list[str]:
+    def process_many(
+        self,
+        texts: list[str],
+        is_query: bool = False,
+        apply_correction: bool = True,
+    ) -> list[str]:
         """Preprocess a batch of texts using spaCy's batched ``nlp.pipe``.
 
         This is the throughput-oriented entry point used by the indexer. It
@@ -188,6 +202,9 @@ class TextProcessor:
             texts: Raw input texts.
             is_query: If False, surviving tokens populate the spell checker
                 vocabulary. If True, tokens are corrected against it.
+            apply_correction: Only relevant when ``is_query=True``. When False,
+                spell correction is skipped so the query keeps the user's
+                original wording. Ignored on the indexing path.
 
         Returns:
             One space-joined token string per input text, in the same order.
@@ -203,7 +220,13 @@ class TextProcessor:
         for doc in self._nlp.pipe(normalized, batch_size=self.config.batch_size):
             tokens = self._extract_tokens(doc)
             if is_query:
-                tokens = self._correct_spelling(tokens)
+                if apply_correction:
+                    tokens = self._correct_spelling(tokens)
+                else:
+                    # User opted out of correction: keep tokens verbatim and
+                    # clear any corrections recorded by a previous call so
+                    # get_last_corrections() reflects this run honestly.
+                    self._last_corrections = {}
             else:
                 vocabulary_tokens.update(tokens)
             results.append(" ".join(tokens))

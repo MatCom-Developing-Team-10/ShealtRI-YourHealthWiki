@@ -407,7 +407,9 @@ class IndexerService:
     # Query path
     # ------------------------------------------------------------------
 
-    def build_query(self, query_text: str) -> IndexedCorpus:
+    def build_query(
+        self, query_text: str, apply_correction: bool = True
+    ) -> IndexedCorpus:
         """Build a single-document IndexedCorpus from a user query.
 
         Uses ``is_query=True`` so TextProcessor applies spell correction
@@ -422,6 +424,11 @@ class IndexerService:
 
         Args:
             query_text: Raw query string from the user. May contain typos.
+            apply_correction: When True (default), misspelled tokens are
+                rewritten to the closest known vocabulary term. When False,
+                the query is processed verbatim — honouring a user who chose
+                to search exactly what they typed. In that case
+                ``corrected_text`` is left ``None``.
 
         Returns:
             IndexedCorpus with exactly one document representing the query.
@@ -436,7 +443,9 @@ class IndexerService:
                 vocabulary=[],
             )
 
-        processed = self.text_processor.process(query_text, is_query=True)
+        processed = self.text_processor.process(
+            query_text, is_query=True, apply_correction=apply_correction
+        )
         tokens = processed.split() if processed else []
 
         tf_counter = Counter(tokens)

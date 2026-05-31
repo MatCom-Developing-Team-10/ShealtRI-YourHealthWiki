@@ -362,14 +362,26 @@ class Pipeline:
         top_k: int = 5,
         user_profile: UserProfile | None = None,
         force_web: bool = False,
+        apply_correction: bool = True,
     ) -> tuple[list, object | None]:
         """Run the full query pipeline and return retrieved documents and RAG response.
+
+        Args:
+            query_text: Raw query string from the user.
+            top_k: Number of results to return.
+            user_profile: Optional profile that tailors the RAG response.
+            force_web: When True, force the web-search fallback to fire.
+            apply_correction: When True (default), spell-correct the query
+                against the indexed vocabulary before retrieval. When False,
+                search exactly what the user typed (no spell correction).
 
         Returns:
             Tuple of (retrieved_documents, rag_response).
             rag_response is None if the RAG service fails.
         """
-        query_corpus = self.indexer.build_query(query_text)
+        query_corpus = self.indexer.build_query(
+            query_text, apply_correction=apply_correction
+        )
         query = Query(text=query_text, indexed_corpus=query_corpus, user_profile=user_profile)
 
         # Microkernel flow (each hook is a no-op when no plugin is registered):
