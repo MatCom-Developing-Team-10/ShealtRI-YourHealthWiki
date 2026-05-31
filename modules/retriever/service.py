@@ -333,6 +333,7 @@ class LSIRetriever(BaseRetriever):
         document_store: DocumentStore,
         model_dir: str = "models/lsi",
         similarity_threshold: float | None = None,
+        feedback_service: "RelevanceFeedbackService | None" = None,
     ) -> "LSIRetriever":
         """Restore a fitted retriever from persisted artifacts.
 
@@ -344,6 +345,9 @@ class LSIRetriever(BaseRetriever):
             model_dir: Directory containing saved artifacts.
             similarity_threshold: Minimum similarity score for results.
                 If None, uses DEFAULT_SIMILARITY_THRESHOLD.
+            feedback_service: Optional Rocchio feedback service, forwarded
+                to the constructor so warm-started retrievers behave like
+                freshly fitted ones.
 
         Returns:
             Ready-to-use ``LSIRetriever`` instance.
@@ -353,6 +357,7 @@ class LSIRetriever(BaseRetriever):
             document_store=document_store,
             model_dir=model_dir,
             similarity_threshold=similarity_threshold,
+            feedback_service=feedback_service,
         )
         instance.tfidf = TfidfProcessor.load(model_dir)
         instance.model = LSIModel.load(model_dir)

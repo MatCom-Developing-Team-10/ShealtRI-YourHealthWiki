@@ -124,6 +124,47 @@ def recall(retrieved: list[str], relevance: RelevanceMap) -> float:
     return counts.rr / denominator
 
 
+def fallout(
+    retrieved: list[str],
+    relevance: RelevanceMap,
+    corpus_size: int,
+) -> float:
+    """Fallout = |RI| / |RI ∪ NI|.
+
+    Fraction of the irrelevant documents that the system retrieved (the
+    IR analogue of the false-positive rate). Lower is better; 0.0 means
+    no irrelevant document was returned.
+
+    Args:
+        retrieved: Retrieved doc_ids (order ignored).
+        relevance: Relevance judgments for the query.
+        corpus_size: Total number of documents in the collection. Required
+            to know how many irrelevant documents exist outside the
+            retrieved set.
+
+    Returns:
+        Fallout in [0, 1]. Returns 0.0 when the collection contains no
+        irrelevant documents.
+    """
+    counts = confusion_counts(retrieved, relevance, corpus_size=corpus_size)
+    denominator = counts.ri + counts.ni  # all irrelevant docs in the collection
+    if denominator == 0:
+        return 0.0
+    return counts.ri / denominator
+
+
+def fallout_at_k(
+    retrieved: list[str],
+    relevance: RelevanceMap,
+    corpus_size: int,
+    k: int,
+) -> float:
+    """Fallout considering only the top-k of the ranking (Fallout@k)."""
+    if k <= 0:
+        return 0.0
+    return fallout(retrieved[:k], relevance, corpus_size)
+
+
 def f_measure(p: float, r: float, beta: float = 1.0) -> float:
     """General F-measure F = (1 + β²)·P·R / (β²·P + R).
 

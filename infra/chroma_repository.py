@@ -116,13 +116,18 @@ class ChromaRepository(BaseRepository):
             )
             return None
 
-        if not result or not result.get("embeddings"):
+        if result is None:
             return None
-        vectors = result["embeddings"]
+        vectors = result.get("embeddings")
+        # ChromaDB may return ``None``, an empty list, or a numpy array — the
+        # last case crashes truthy checks (``if not vectors``) when len > 1.
+        # Use explicit length / None tests instead.
         if vectors is None or len(vectors) == 0:
             return None
         first = vectors[0]
-        # ChromaDB may return numpy arrays — normalise to list[float].
+        if first is None or len(first) == 0:
+            return None
+        # Normalise numpy arrays to plain list[float].
         return [float(x) for x in first]
 
     def search_similar(self, query_vector: list[float], top_k: int = 10) -> list[tuple[str, float]]:

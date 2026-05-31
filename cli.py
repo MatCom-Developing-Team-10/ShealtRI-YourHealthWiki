@@ -24,6 +24,7 @@ import argparse
 import json
 import sys
 import textwrap
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -49,12 +50,31 @@ from modules.retriever.fallback_retriever import FallbackRetriever
 from modules.retriever.service import LSIRetriever
 from modules.web_search import InternetSearchRetriever, WebContentFetcher
 from modules.text_processor.service import TextProcessor
+from modules.rag.evaluator import RAGEvaluator
 from modules.rag.service import RAGService
+from modules.recommender import ContentBasedRecommender
 from plugins.expansion.service import QueryExpansionPlugin
+from plugins.feedback import JSONLFeedbackStore, RelevanceFeedbackService
 _CHROMA_DIR = "data/chroma"
 _STORE_DIR = "data/documents"
 _MODELS_DIR = "models/lsi"
 _RAW_DIR = Path("data/raw")
+_FEEDBACK_PATH = "data/feedback.jsonl"
+
+
+@dataclass(slots=True)
+class PipelineResult:
+    """Aggregated output of a single retrieval cycle.
+
+    Bundles the retrieved documents, RAG response, and the side-channel
+    information (query expansion, RAG quality scores) that the UI needs
+    to surface without re-running the pipeline.
+    """
+
+    results: list
+    rag_response: object | None
+    expansion_terms: list[str] = field(default_factory=list)
+    rag_quality: dict[str, float] | None = None
 
 
 def extract_snippet(text: str, query: str, length: int = 200) -> str:
@@ -158,10 +178,17 @@ class Pipeline:
             collection_name="medical_documents",
         )
         self.document_store = FileSystemDocumentStore(storage_dir=_STORE_DIR)
+        # Rocchio relevance feedback: persistent JSONL store + service. The
+        # retriever consults the service on every query and re-weights the
+        # latent vector when judgments exist for the same query text.
+        self.feedback_service = RelevanceFeedbackService(
+            store=JSONLFeedbackStore(_FEEDBACK_PATH),
+        )
         self.lsi = LSIRetriever(
             repository=self.repository,
             document_store=self.document_store,
             model_dir=_MODELS_DIR,
+            feedback_service=self.feedback_service,
         )
         _internet = InternetSearchRetriever(
             fetcher=WebContentFetcher(),
@@ -180,6 +207,14 @@ class Pipeline:
         # already-ranked documents and does not re-rank them itself.
         self.ranker = HybridRanker()
         self.rag_service = RAGService()
+        self.rag_evaluator = RAGEvaluator()
+        # Content-based recommender (§4.2.3 — optional). Lives on its own
+        # endpoint and feeds a separate UI panel, so it stays orthogonal
+        # to the LSI ranking, Rocchio, and the evaluation dataset.
+        self.recommender = ContentBasedRecommender(
+            repository=self.repository,
+            document_store=self.document_store,
+        )
         # Microkernel: plugins are registered in build() once the vocabulary
         # the expansion plugin needs is available. Empty here = no-op pipeline.
         self.plugins = PluginPipeline()
@@ -226,6 +261,7 @@ class Pipeline:
             repository=self.repository,
             document_store=self.document_store,
             model_dir=_MODELS_DIR,
+            feedback_service=self.feedback_service,
         )
         self.retriever.primary = self.lsi
 
@@ -338,12 +374,13 @@ class Pipeline:
         top_k: int = 5,
         user_profile: UserProfile | None = None,
         force_web: bool = False,
-    ) -> tuple[list, object | None]:
-        """Run the full query pipeline and return retrieved documents and RAG response.
+    ) -> PipelineResult:
+        """Run the full query pipeline and return all stage outputs.
 
         Returns:
-            Tuple of (retrieved_documents, rag_response).
-            rag_response is None if the RAG service fails.
+            :class:`PipelineResult` bundling the retrieved documents, the
+            RAG response (``None`` on failure), the terms added by the
+            expansion plugin, and the RAG quality scores.
         """
         query_corpus = self.indexer.build_query(query_text)
         query = Query(text=query_text, indexed_corpus=query_corpus, user_profile=user_profile)
@@ -381,13 +418,30 @@ class Pipeline:
         results = context.results
 
         rag_response = None
+        rag_quality: dict[str, float] | None = None
         if results:
             try:
                 rag_response = self.rag_service.generate(query, results)
             except Exception as exc:
                 print(f"  [warn] RAG generation failed: {exc}", file=sys.stderr)
 
-        return results, rag_response
+            if rag_response is not None and getattr(rag_response, "answer", ""):
+                try:
+                    rag_quality = self.rag_evaluator.evaluate(
+                        query, rag_response.answer, results,
+                    )
+                except Exception as exc:
+                    print(f"  [warn] RAG evaluation failed: {exc}", file=sys.stderr)
+
+        expansion = context.metadata.get("expansion", {})
+        expansion_terms = list(expansion.get("added", []))
+
+        return PipelineResult(
+            results=results,
+            rag_response=rag_response,
+            expansion_terms=expansion_terms,
+            rag_quality=rag_quality,
+        )
 
     def stats(self) -> dict:
         """Return corpus statistics."""
@@ -447,6 +501,12 @@ def _print_rag_response(response: object) -> None:
             print()
 
 
+def _print_rag_quality(metrics: dict[str, float]) -> None:
+    """Display the lightweight RAGAS-style quality metrics (Conf_9)."""
+    parts = [f"{name}={value:.2f}" for name, value in metrics.items()]
+    print(f"\n  ──── Calidad RAG ────  {'  '.join(parts)}")
+
+
 def _print_help() -> None:
     print("""
   Commands:
@@ -489,10 +549,14 @@ def run_interactive(pipeline: Pipeline, user_profile: UserProfile | None = None)
                 _print_help()
                 continue
 
-            results, rag_response = pipeline.retrieve(raw, user_profile=user_profile)
-            _print_results(results, raw)
-            if rag_response:
-                _print_rag_response(rag_response)
+            outcome = pipeline.retrieve(raw, user_profile=user_profile)
+            _print_results(outcome.results, raw)
+            if outcome.expansion_terms:
+                print(f"\n  (también buscamos: {', '.join(outcome.expansion_terms)})")
+            if outcome.rag_response:
+                _print_rag_response(outcome.rag_response)
+            if outcome.rag_quality:
+                _print_rag_quality(outcome.rag_quality)
             print()
 
     except Exception as exc:
@@ -501,10 +565,14 @@ def run_interactive(pipeline: Pipeline, user_profile: UserProfile | None = None)
 
 
 def run_oneshot(pipeline: Pipeline, query: str, user_profile: UserProfile | None = None) -> None:
-    results, rag_response = pipeline.retrieve(query, user_profile=user_profile)
-    _print_results(results, query)
-    if rag_response:
-        _print_rag_response(rag_response)
+    outcome = pipeline.retrieve(query, user_profile=user_profile)
+    _print_results(outcome.results, query)
+    if outcome.expansion_terms:
+        print(f"\n  (también buscamos: {', '.join(outcome.expansion_terms)})")
+    if outcome.rag_response:
+        _print_rag_response(outcome.rag_response)
+    if outcome.rag_quality:
+        _print_rag_quality(outcome.rag_quality)
     print()
 
 
