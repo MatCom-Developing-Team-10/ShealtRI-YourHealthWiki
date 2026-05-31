@@ -25,6 +25,7 @@ from .dataset import load_dataset
 from .metrics import (
     average_precision,
     f1,
+    fallout_at_k,
     ndcg_at_k,
     precision_at_k,
     recall_at_k,
@@ -45,9 +46,26 @@ class EvaluationService:
         k: Cut-off rank for the @k metrics (P@k, R@k, NDCG@k).
     """
 
-    def __init__(self, search_fn: SearchFn, k: int = 10) -> None:
+    def __init__(
+        self,
+        search_fn: SearchFn,
+        k: int = 10,
+        corpus_size: int | None = None,
+    ) -> None:
+        """Initialize the evaluator.
+
+        Args:
+            search_fn: See class docstring.
+            k: Cut-off rank for the @k metrics.
+            corpus_size: Total number of documents in the collection.
+                Required for Fallout@k; when ``None`` the Fallout column
+                is skipped (a single integer is enough — the metric only
+                needs to know how many irrelevant documents exist outside
+                the retrieved set).
+        """
         self._search_fn = search_fn
         self.k = k
+        self.corpus_size = corpus_size
 
     def evaluate(self, dataset: EvaluationDataset) -> EvaluationReport:
         """Run every query and aggregate the metrics.
@@ -77,6 +95,10 @@ class EvaluationService:
                 "AP": average_precision(retrieved, relevance),
                 "RR": reciprocal_rank(retrieved, relevance),
             }
+            if self.corpus_size is not None:
+                metrics[f"Fallout@{self.k}"] = fallout_at_k(
+                    retrieved, relevance, self.corpus_size, self.k,
+                )
 
             num_relevant = sum(1 for g in relevance.values() if g >= 1)
             per_query.append(

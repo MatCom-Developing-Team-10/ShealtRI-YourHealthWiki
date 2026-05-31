@@ -19,6 +19,11 @@ joblib>=1.4.0
 
 # Vector database
 chromadb>=0.5.0
+# chromadb 1.5.x pulls opentelemetry transitively; newer SDK versions removed
+# symbols chromadb still imports. Pin the family until chromadb catches up.
+opentelemetry-api>=1.30,<1.40
+opentelemetry-sdk>=1.30,<1.40
+opentelemetry-exporter-otlp-proto-grpc>=1.30,<1.40
 
 # RAG & environment
 python-dotenv>=1.0.0

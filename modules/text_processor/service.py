@@ -213,6 +213,22 @@ class TextProcessor:
 
         return results
 
+    def lemmatize(self, tokens: list[str]) -> list[str]:
+        """Return the spaCy lemma for each input token, preserving order.
+
+        Exposes the lemmatizer in isolation from the rest of the pipeline
+        (no stopword removal, no spell correction, no length filtering).
+        Multi-word inputs are tokenised by spaCy and their lemmas are
+        concatenated with a space, so callers always get exactly one output
+        string per input string.
+        """
+        if not tokens:
+            return []
+        lemmas: list[str] = []
+        for doc in self._nlp.pipe(tokens, batch_size=self.config.batch_size):
+            lemmas.append(" ".join(t.lemma_ for t in doc))
+        return lemmas
+
     def _extract_tokens(self, doc: "spacy.tokens.Doc") -> list[str]:
         """Turn a spaCy ``Doc`` into the final list of indexable tokens.
 

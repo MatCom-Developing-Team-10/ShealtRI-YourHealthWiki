@@ -147,6 +147,8 @@ async function loadProfiles() {
 // Results Rendering
 // ─────────────────────────────────────────────────────────────────────────────
 
+let _lastQueryText = '';
+
 function renderResults(results) {
     const container = document.getElementById('results-container');
 
@@ -201,8 +203,199 @@ function renderResults(results) {
         snippetEl.textContent = result.snippet;
         card.appendChild(snippetEl);
 
+        // Relevance feedback (Rocchio) — only for indexed docs; web fallback
+        // results aren't in the latent space so feedback would be a no-op.
+        if (result.doc_id && sourceType !== 'web') {
+            card.appendChild(buildFeedbackBar(result.doc_id));
+        }
+
         container.appendChild(card);
     });
+}
+
+function buildFeedbackBar(docId) {
+    const bar = document.createElement('div');
+    bar.className = 'feedback-bar';
+    bar.innerHTML = `
+        <span class="feedback-label">¿Te resultó útil?</span>
+        <button class="feedback-btn feedback-up" data-doc="${escapeHtml(docId)}" data-relevant="true" aria-label="Marcar como relevante">👍</button>
+        <button class="feedback-btn feedback-down" data-doc="${escapeHtml(docId)}" data-relevant="false" aria-label="Marcar como no relevante">👎</button>
+        <span class="judgment-count" hidden></span>
+    `;
+    bar.querySelectorAll('.feedback-btn').forEach(btn => {
+        btn.addEventListener('click', () => sendFeedback(btn));
+    });
+    return bar;
+}
+
+async function sendFeedback(btn) {
+    if (!_lastQueryText) return;
+    const docId = btn.dataset.doc;
+    const relevant = btn.dataset.relevant === 'true';
+
+    // Visual feedback first (optimistic) — the call is fire-and-forget for UX.
+    const siblings = btn.parentElement.querySelectorAll('.feedback-btn');
+    siblings.forEach(s => s.classList.remove('feedback-selected'));
+    btn.classList.add('feedback-selected');
+
+    try {
+        const response = await fetch('/api/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: _lastQueryText, doc_id: docId, relevant }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+
+        // Echo back how many judgments this query has accumulated so the user
+        // can see Rocchio is building up evidence.
+        const total = data.total_judgments_for_query;
+        if (typeof total === 'number') {
+            const badge = btn.parentElement.querySelector('.judgment-count');
+            if (badge) {
+                badge.textContent = `Rocchio · ${total} juicio${total !== 1 ? 's' : ''}`;
+                badge.hidden = false;
+            }
+            // Cheap refresh of the global counter in the footer.
+            loadStats();
+        }
+    } catch (err) {
+        console.error('Failed to record feedback:', err);
+        btn.classList.remove('feedback-selected');
+    }
+}
+
+async function loadStats() {
+    try {
+        const response = await fetch('/api/stats');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const s = await response.json();
+        const footer = document.getElementById('stats-footer');
+        footer.innerHTML = `
+            <span>📚 ${s.n_documents.toLocaleString()} documentos · ${s.n_chunks.toLocaleString()} chunks</span>
+            <span>🔤 vocab ${s.n_terms.toLocaleString()}</span>
+            <span>📐 LSI k=${s.lsi_k}</span>
+            <span>📝 ${s.avg_tokens_per_doc.toFixed(0)} tokens/doc</span>
+            <span>👍 ${s.feedback_judgments} juicios Rocchio</span>
+        `;
+        footer.hidden = false;
+    } catch (err) {
+        console.error('Failed to load stats:', err);
+    }
+}
+
+async function fetchRecommendations(seedDocIds, profile, excludeIds = null) {
+    const panel = document.getElementById('recommendations-panel');
+    const list = document.getElementById('recommendations-list');
+
+    if (!seedDocIds || seedDocIds.length === 0) {
+        panel.hidden = true;
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/recommend', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                seed_doc_ids: seedDocIds,
+                top_k: 3,
+                profile: profile,
+                exclude_ids: excludeIds || seedDocIds,
+            }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+
+        if (!data.items || data.items.length === 0) {
+            panel.hidden = true;
+            return;
+        }
+
+        list.innerHTML = data.items.map(item => `
+            <div class="recommendation-card" data-doc="${escapeHtml(item.doc_id)}" data-url="${escapeHtml(item.source)}">
+                <div class="recommendation-title">${escapeHtml(item.title)}</div>
+                <div class="recommendation-snippet">${escapeHtml(item.snippet)}</div>
+                <div class="recommendation-footer">
+                    <span>${escapeHtml(extractSourceLabel(item.source))}</span>
+                    <span class="recommendation-similarity">${(item.similarity * 100).toFixed(0)}% similitud</span>
+                </div>
+            </div>
+        `).join('');
+
+        // Clicking a recommendation opens its URL in a new tab (web) or
+        // serves the local file (local). Reuses the same routing as the
+        // result cards above.
+        list.querySelectorAll('.recommendation-card').forEach(card => {
+            card.addEventListener('click', () => {
+                const url = card.dataset.url;
+                if (url && url !== '(sin URL)') {
+                    if (url.startsWith('http')) {
+                        window.open(url, '_blank', 'noopener');
+                    } else {
+                        window.open(`/api/document?path=${encodeURIComponent(url)}`, '_blank', 'noopener');
+                    }
+                }
+            });
+        });
+
+        panel.hidden = false;
+    } catch (err) {
+        console.error('Failed to fetch recommendations:', err);
+        panel.hidden = true;
+    }
+}
+
+function extractSourceLabel(url) {
+    if (!url || url === '(sin URL)') return 'local';
+    try {
+        const host = new URL(url).hostname.replace(/^www\./, '');
+        return host;
+    } catch {
+        return 'local';
+    }
+}
+
+function renderExpansion(terms) {
+    const hint = document.getElementById('expansion-hint');
+    if (!terms || terms.length === 0) {
+        hint.hidden = true;
+        return;
+    }
+    const chips = terms
+        .map(t => `<span class="expansion-chip">${escapeHtml(t)}</span>`)
+        .join('');
+    hint.innerHTML = `<span class="expansion-prefix">También buscamos:</span> ${chips}`;
+    hint.hidden = false;
+}
+
+function renderRagMeta(usedLlm, modelName) {
+    const meta = document.getElementById('rag-meta');
+    if (!modelName) {
+        meta.hidden = true;
+        return;
+    }
+    const backend = usedLlm ? modelName : 'plantilla (sin LLM)';
+    meta.innerHTML = `<span class="rag-meta-pill">Backend: ${escapeHtml(backend)}</span>`;
+    meta.hidden = false;
+}
+
+function renderRagQuality(quality) {
+    const container = document.getElementById('rag-quality');
+    if (!quality) {
+        container.hidden = true;
+        return;
+    }
+    const labels = {
+        faithfulness: 'Fidelidad',
+        groundedness: 'Anclaje',
+        context_relevance: 'Relevancia del contexto',
+    };
+    const chips = Object.entries(quality)
+        .map(([k, v]) => `<span class="quality-chip" title="${escapeHtml(k)}">${escapeHtml(labels[k] || k)}: ${(v * 100).toFixed(0)}%</span>`)
+        .join('');
+    container.innerHTML = `<div class="quality-label">Calidad RAG</div><div class="quality-chips">${chips}</div>`;
+    container.hidden = false;
 }
 
 function renderRagResponse(text) {
@@ -293,6 +486,7 @@ async function showEvaluation() {
     const meta = document.getElementById('results-meta');
     meta.hidden = true;
     document.getElementById('spell-hint').hidden = true;
+    document.getElementById('expansion-hint').hidden = true;
     document.getElementById('web-fallback-banner').hidden = true;
 
     container.innerHTML = `
@@ -307,20 +501,52 @@ async function showEvaluation() {
         const data = await response.json();
 
         const metrics = data.aggregated;
-        const rows = Object.entries(metrics)
+        const aggregatedRows = Object.entries(metrics)
             .map(([name, val]) => `<tr><td>${escapeHtml(name)}</td><td>${(val * 100).toFixed(2)}%</td></tr>`)
             .join('');
+
+        // Build per-query table from the metric keys of the first row, so
+        // Fallout@k (which only appears when corpus_size is known) shows up
+        // automatically without a hard-coded column list.
+        let perQueryHtml = '';
+        if (data.per_query && data.per_query.length > 0) {
+            const metricNames = Object.keys(data.per_query[0].metrics);
+            const headerCells = metricNames
+                .map(name => `<th class="num">${escapeHtml(name)}</th>`)
+                .join('');
+            const bodyRows = data.per_query.map(q => {
+                const numericCells = metricNames
+                    .map(name => `<td class="num">${(q.metrics[name] * 100).toFixed(1)}%</td>`)
+                    .join('');
+                return `<tr>
+                    <td>${escapeHtml(q.query_id)}</td>
+                    <td>${escapeHtml(q.text)}</td>
+                    <td class="num">${q.num_relevant}</td>
+                    ${numericCells}
+                </tr>`;
+            }).join('');
+            perQueryHtml = `
+                <h4 style="margin-top:18px;">Desglose por consulta</h4>
+                <table class="per-query-table">
+                    <thead><tr>
+                        <th>ID</th><th>Consulta</th><th class="num">|Rel|</th>${headerCells}
+                    </tr></thead>
+                    <tbody>${bodyRows}</tbody>
+                </table>
+            `;
+        }
 
         container.innerHTML = `
             <div class="eval-section">
                 <div class="eval-header">
-                    <h3>Evaluación del sistema (k=${data.k}, ${data.num_queries} consultas)</h3>
+                    <h3>Evaluación del sistema (k=${data.k}, ${data.num_queries} consultas, |corpus|=${data.corpus_size})</h3>
                     <button id="eval-back-btn" class="eval-back-btn">← Volver</button>
                 </div>
                 <table class="metrics-table">
                     <thead><tr><th>Métrica</th><th>Valor</th></tr></thead>
-                    <tbody>${rows}</tbody>
+                    <tbody>${aggregatedRows}</tbody>
                 </table>
+                ${perQueryHtml}
             </div>
         `;
 
@@ -346,15 +572,24 @@ async function executeQuery(queryText) {
     const searchBtn = document.getElementById('search-btn');
     const resultsContainer = document.getElementById('results-container');
     const spellHint = document.getElementById('spell-hint');
+    const expansionHint = document.getElementById('expansion-hint');
     const resultsMeta = document.getElementById('results-meta');
     const webBanner = document.getElementById('web-fallback-banner');
+    const ragMeta = document.getElementById('rag-meta');
+    const ragQuality = document.getElementById('rag-quality');
     const historialPanel = document.getElementById('historial-panel');
+    const recommendationsPanel = document.getElementById('recommendations-panel');
 
     // Hide auxiliary elements at the start
     spellHint.hidden = true;
+    expansionHint.hidden = true;
     resultsMeta.hidden = true;
     webBanner.hidden = true;
+    ragMeta.hidden = true;
+    ragQuality.hidden = true;
     historialPanel.hidden = true;
+    recommendationsPanel.hidden = true;
+    _lastQueryText = queryText;
 
     searchBtn.classList.add('loading');
     searchBtn.disabled = true;
@@ -391,7 +626,18 @@ async function executeQuery(queryText) {
         // Render results
         _lastResults = data.results;
         renderResults(data.results);
+        renderRagMeta(data.rag_used_llm, data.rag_model_name);
         renderRagResponse(data.rag_response);
+        renderRagQuality(data.rag_quality);
+        renderExpansion(data.expansion_terms);
+
+        // Fire the recommender in parallel (it's not on the critical path —
+        // results are already rendered). Uses the top-3 result doc_ids as
+        // the seed and excludes everything already shown so the panel only
+        // surfaces *new* documents.
+        const seeds = data.results.slice(0, 3).map(r => r.doc_id).filter(Boolean);
+        const excludes = data.results.map(r => r.doc_id).filter(Boolean);
+        fetchRecommendations(seeds, currentProfile, excludes);
 
         // Query time
         if (data.query_time_ms != null) {
@@ -443,6 +689,7 @@ async function executeQuery(queryText) {
 
 document.addEventListener('DOMContentLoaded', async () => {
     await loadProfiles();
+    loadStats();
 
     const searchInput = document.getElementById('search-input');
     const searchBtn = document.getElementById('search-btn');

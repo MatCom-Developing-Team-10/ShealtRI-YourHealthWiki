@@ -6,8 +6,6 @@ expansion logic is exercised in isolation.
 
 from __future__ import annotations
 
-import pytest
-
 from core.interfaces import IndexedCorpus, Plugin
 from core.models import Document, PipelineContext, Query
 from plugins.expansion import (
@@ -44,20 +42,8 @@ def _query_corpus(terms: list[str]) -> IndexedCorpus:
     )
 
 
-class _FakeProcessor:
-    """Deterministic stand-in for TextProcessor used in PRF tests.
-
-    Lowercases, splits on whitespace and drops tokens shorter than 2 chars.
-    Matches the behaviour the real TextProcessor would have on the toy
-    inputs used here.
-    """
-
-    def process(self, text: str, is_query: bool = False) -> str:
-        return " ".join(t for t in text.lower().split() if len(t) >= 2)
-
-
 # ---------------------------------------------------------------------------
-# Thesaurus-only expansion
+# Thesaurus expansion
 # ---------------------------------------------------------------------------
 
 
@@ -114,9 +100,7 @@ class TestExpandWithThesaurus:
         assert len(added) <= 2
 
     def test_use_thesaurus_disabled(self):
-        expander = QueryExpander(
-            ExpansionConfig(use_thesaurus=False, use_prf=False)
-        )
+        expander = QueryExpander(ExpansionConfig(use_thesaurus=False))
         original = _query_corpus(["hipertensión"])
         out = expander.expand_with_thesaurus(original, target_vocabulary=None)
         assert out is original  # nothing to add
@@ -138,91 +122,6 @@ class TestExpandWithThesaurus:
         expander.expand_with_thesaurus(original, target_vocabulary=None)
         assert original.vocabulary == original_vocab_snapshot
         assert original.inverted_index == original_index_snapshot
-
-
-# ---------------------------------------------------------------------------
-# Pseudo-Relevance Feedback
-# ---------------------------------------------------------------------------
-
-
-class TestExpandWithPRF:
-    def _docs(self):
-        return [
-            Document(
-                doc_id="d1",
-                text="diabetes glucosa insulina páncreas diabetes glucosa",
-                url="",
-            ),
-            Document(
-                doc_id="d2",
-                text="glucemia insulina hiperglucemia diabetes",
-                url="",
-            ),
-        ]
-
-    def test_prf_injects_top_terms_from_initial_results(self):
-        expander = QueryExpander(
-            ExpansionConfig(
-                use_thesaurus=False, use_prf=True, prf_top_k=2, prf_terms_per_doc=2
-            )
-        )
-        original = _query_corpus(["diabetes"])
-        out = expander.expand_with_prf(
-            original,
-            initial_results=self._docs(),
-            text_processor=_FakeProcessor(),
-            target_vocabulary=None,
-        )
-        added = set(out.vocabulary) - set(original.vocabulary)
-        # 'glucosa' and 'insulina' are the dominant terms across both docs
-        assert "glucosa" in added or "insulina" in added
-
-    def test_prf_with_no_initial_results_is_noop(self):
-        expander = QueryExpander(
-            ExpansionConfig(use_thesaurus=False, use_prf=True)
-        )
-        original = _query_corpus(["diabetes"])
-        out = expander.expand_with_prf(
-            original,
-            initial_results=[],
-            text_processor=_FakeProcessor(),
-            target_vocabulary=None,
-        )
-        assert out is original
-
-    def test_prf_respects_target_vocabulary(self):
-        expander = QueryExpander(
-            ExpansionConfig(use_thesaurus=False, use_prf=True)
-        )
-        original = _query_corpus(["diabetes"])
-        out = expander.expand_with_prf(
-            original,
-            initial_results=self._docs(),
-            text_processor=_FakeProcessor(),
-            target_vocabulary=["diabetes", "glucosa"],  # only allow glucosa
-        )
-        added = set(out.vocabulary) - set(original.vocabulary)
-        assert added <= {"glucosa"}
-
-    def test_thesaurus_and_prf_combined(self):
-        expander = QueryExpander(
-            ExpansionConfig(use_thesaurus=True, use_prf=True, prf_top_k=2)
-        )
-        original = _query_corpus(["diabetes"])
-        out = expander.expand_with_prf(
-            original,
-            initial_results=self._docs(),
-            text_processor=_FakeProcessor(),
-            target_vocabulary=None,
-        )
-        added = set(out.vocabulary) - set(original.vocabulary)
-        # Thesaurus alone gives {dm, glucemia, glucosa, insulina, hiperglucemia}
-        # PRF over the 2 docs reinforces glucosa/insulina.
-        assert {"glucosa", "insulina"} <= added | original_set(original)
-
-
-def original_set(corpus: IndexedCorpus) -> set[str]:
-    return set(corpus.vocabulary)
 
 
 # ---------------------------------------------------------------------------

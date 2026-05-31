@@ -66,6 +66,7 @@ class QueryRequest(BaseModel):
 
 
 class DocumentResult(BaseModel):
+    doc_id: str
     title: str
     source: str
     snippet: str
@@ -79,12 +80,67 @@ class QueryResponse(BaseModel):
     query_time_ms: int
     corrected_query: str | None = None
     used_web_fallback: bool = False
+    expansion_terms: list[str] = []
+    rag_quality: dict[str, float] | None = None
+    rag_model_name: str | None = None
+    rag_used_llm: bool = False
+
+
+class FeedbackRequest(BaseModel):
+    query: str
+    doc_id: str
+    relevant: bool
+
+
+class FeedbackResponse(BaseModel):
+    recorded: bool
+    total_judgments_for_query: int
+
+
+class PerQueryEvalResult(BaseModel):
+    query_id: str
+    text: str
+    num_relevant: int
+    num_retrieved: int
+    metrics: dict[str, float]
 
 
 class EvalResponse(BaseModel):
     aggregated: dict[str, float]
     k: int
     num_queries: int
+    corpus_size: int
+    per_query: list[PerQueryEvalResult]
+
+
+class RecommendRequest(BaseModel):
+    seed_doc_ids: list[str]
+    top_k: int = 3
+    profile: str = "paciente"
+    exclude_ids: list[str] = []
+
+
+class RecommendedItem(BaseModel):
+    doc_id: str
+    title: str
+    source: str
+    snippet: str
+    similarity: float
+    source_type: str = "local"
+
+
+class RecommendResponse(BaseModel):
+    items: list[RecommendedItem]
+
+
+class StatsResponse(BaseModel):
+    n_documents: int
+    n_chunks: int
+    n_terms: int
+    avg_tokens_per_doc: float
+    avg_postings_per_term: float
+    lsi_k: int
+    feedback_judgments: int
 
 
 class ProfileOption(BaseModel):
@@ -147,7 +203,7 @@ def query_endpoint(req: QueryRequest) -> QueryResponse:
     )
 
     # Run pipeline
-    results, rag_response = _pipeline.retrieve(
+    outcome = _pipeline.retrieve(
         query_text=req.query,
         top_k=req.top_k,
         user_profile=user_profile,
@@ -156,12 +212,13 @@ def query_endpoint(req: QueryRequest) -> QueryResponse:
 
     # Convert results to JSON-serializable format
     doc_results = []
-    for result in (results or []):
+    for result in (outcome.results or []):
         title = result.document.metadata.get("title", result.document.doc_id)
         snippet = extract_snippet(result.document.text, req.query, length=300)
 
         source_type = result.document.metadata.get("origin", "local")
         doc_results.append(DocumentResult(
+            doc_id=result.document.doc_id,
             title=title,
             source=result.document.url or "(sin URL)",
             snippet=snippet,
@@ -181,10 +238,15 @@ def query_endpoint(req: QueryRequest) -> QueryResponse:
     except Exception:
         pass
 
-    # Extract RAG response text
+    # Extract RAG response text + provenance
     rag_text = ""
-    if rag_response and hasattr(rag_response, "answer"):
-        rag_text = rag_response.answer
+    rag_model_name: str | None = None
+    rag_used_llm = False
+    rag_response = outcome.rag_response
+    if rag_response is not None:
+        rag_text = getattr(rag_response, "answer", "") or ""
+        rag_model_name = getattr(rag_response, "model_name", None)
+        rag_used_llm = bool(getattr(rag_response, "used_llm", False))
 
     elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -194,7 +256,62 @@ def query_endpoint(req: QueryRequest) -> QueryResponse:
         query_time_ms=elapsed_ms,
         corrected_query=corrected_query,
         used_web_fallback=used_web_fallback,
+        expansion_terms=outcome.expansion_terms,
+        rag_quality=outcome.rag_quality,
+        rag_model_name=rag_model_name,
+        rag_used_llm=rag_used_llm,
     )
+
+
+@app.post("/api/feedback")
+def feedback_endpoint(req: FeedbackRequest) -> FeedbackResponse:
+    """Record one relevance judgment so Rocchio re-weights the next query.
+
+    The next time the same query text is searched, ``LSIRetriever`` will
+    consult ``feedback_service`` and pull the latent query vector toward
+    the centroid of docs marked relevant and away from those marked
+    non-relevant.
+    """
+    _pipeline.feedback_service.record(
+        query_text=req.query, doc_id=req.doc_id, relevant=req.relevant,
+    )
+    rel, non_rel = _pipeline.feedback_service.store.get_for_query(req.query)
+    return FeedbackResponse(
+        recorded=True, total_judgments_for_query=len(rel) + len(non_rel),
+    )
+
+
+@app.post("/api/recommend")
+def recommend_endpoint(req: RecommendRequest) -> RecommendResponse:
+    """Return content-based recommendations seeded by the latest result set.
+
+    Lives on its own endpoint so it stays orthogonal to ``/api/query``:
+    Rocchio re-weighting, HybridRanker, and the evaluation dataset are
+    unaffected. The profile-based source boost only nudges ties — the
+    recommender remains similarity-first (Conf_6 + Conf_11).
+    """
+    profile_type = _PROFILE_MAP.get(req.profile, UserProfileType.PATIENT)
+    recs = _pipeline.recommender.recommend(
+        seed_doc_ids=req.seed_doc_ids,
+        top_k=req.top_k,
+        exclude_ids=set(req.exclude_ids),
+        profile=profile_type,
+    )
+
+    items: list[RecommendedItem] = []
+    for r in recs:
+        doc = r.document
+        title = doc.metadata.get("title", doc.doc_id)
+        snippet = extract_snippet(doc.text, " ".join(doc.metadata.get("title", "").split()), length=180)
+        items.append(RecommendedItem(
+            doc_id=doc.doc_id,
+            title=title,
+            source=doc.url or "(sin URL)",
+            snippet=snippet,
+            similarity=float(r.similarity),
+            source_type=doc.metadata.get("origin", "local"),
+        ))
+    return RecommendResponse(items=items)
 
 
 @app.get("/api/document")
@@ -209,6 +326,22 @@ def serve_document(path: str) -> FileResponse:
     return FileResponse(str(resolved))
 
 
+def _original_doc_count() -> int:
+    """Count distinct original documents in the indexed corpus.
+
+    The LSI index is built over chunks; ``_build_lsi_search_fn`` collapses
+    chunk results back to their parent document id, so Fallout must be
+    computed against the same denominator (number of *original* docs).
+    """
+    if _pipeline.corpus is None:
+        return 0
+    originals: set[str] = set()
+    for doc in _pipeline.corpus.documents:
+        original = doc.metadata.get("original_doc_id") or doc.doc_id.split("__chunk_")[0]
+        originals.add(original)
+    return len(originals)
+
+
 @app.get("/api/eval")
 def eval_endpoint(k: int = 10) -> EvalResponse:
     """Run the bundled evaluation dataset against the LSI retriever."""
@@ -218,11 +351,49 @@ def eval_endpoint(k: int = 10) -> EvalResponse:
         str(data_dir / "eval_qrels.json"),
     )
     search_fn = _build_lsi_search_fn(_pipeline)
-    report = EvaluationService(search_fn, k=k).evaluate(dataset)
+    corpus_size = _original_doc_count()
+    report = EvaluationService(
+        search_fn, k=k, corpus_size=corpus_size,
+    ).evaluate(dataset)
+
+    per_query = [
+        PerQueryEvalResult(
+            query_id=r.query_id,
+            text=r.text,
+            num_relevant=r.num_relevant,
+            num_retrieved=r.num_retrieved,
+            metrics=r.metrics,
+        )
+        for r in report.per_query
+    ]
     return EvalResponse(
         aggregated=report.aggregated,
         k=report.k,
         num_queries=len(report.per_query),
+        corpus_size=corpus_size,
+        per_query=per_query,
+    )
+
+
+@app.get("/api/stats")
+def stats_endpoint() -> StatsResponse:
+    """Corpus / model diagnostics for the UI footer."""
+    raw = _pipeline.stats()
+    lsi_k = 0
+    if _pipeline.lsi is not None and _pipeline.lsi.svd is not None:
+        lsi_k = int(_pipeline.lsi.svd.n_components)
+
+    # Total feedback judgments recorded so far across all queries.
+    judgments = len(_pipeline.feedback_service.store)
+
+    return StatsResponse(
+        n_documents=_original_doc_count(),
+        n_chunks=int(raw.get("n_documents", 0)),
+        n_terms=int(raw.get("n_terms", 0)),
+        avg_tokens_per_doc=float(raw.get("avg_tokens_per_doc", 0.0)),
+        avg_postings_per_term=float(raw.get("avg_postings_per_term", 0.0)),
+        lsi_k=lsi_k,
+        feedback_judgments=judgments,
     )
 
 

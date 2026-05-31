@@ -30,7 +30,7 @@ from core.models import PipelineContext, Query
 from modules.indexer import IndexerService
 from modules.indexer.service import IndexerConfig
 from modules.retriever import LSIRetriever
-from plugins.expansion import QueryExpander, QueryExpansionPlugin
+from plugins.expansion import QueryExpansionPlugin
 
 
 # ---------------------------------------------------------------------------
@@ -189,30 +189,3 @@ class TestExpansionIsHarmlessOnTechnicalQueries:
         )
 
 
-class TestPRFRoundTrip:
-    """Pseudo-relevance feedback exercised against the real retriever."""
-
-    def test_prf_picks_terms_from_top_results(
-        self, fitted_pipeline, text_processor
-    ):
-        indexer, retriever = fitted_pipeline
-        # 1) baseline retrieval
-        qc = indexer.build_query("diabetes")
-        initial = retriever.retrieve(
-            Query(text="diabetes", indexed_corpus=qc), top_k=3
-        )
-        assert initial
-
-        # 2) PRF expansion using those results
-        expander = QueryExpander()
-        expander.config.use_thesaurus = False
-        expander.config.use_prf = True
-        expanded_corpus = expander.expand_with_prf(
-            qc,
-            initial_results=[r.document for r in initial],
-            text_processor=text_processor,
-            target_vocabulary=retriever.tfidf.vocabulary,
-        )
-
-        added = set(expanded_corpus.vocabulary) - set(qc.vocabulary)
-        assert added, "PRF added no terms; pseudo-relevant docs may have been empty"
