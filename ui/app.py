@@ -63,6 +63,7 @@ class QueryRequest(BaseModel):
     profile: str = "paciente"
     top_k: int = 5
     force_web: bool = False
+    apply_correction: bool = True
 
 
 class DocumentResult(BaseModel):
@@ -79,6 +80,7 @@ class QueryResponse(BaseModel):
     rag_response: str
     query_time_ms: int
     corrected_query: str | None = None
+    correction_applied: bool = False
     used_web_fallback: bool = False
     expansion_terms: list[str] = []
     rag_quality: dict[str, float] | None = None
@@ -202,12 +204,14 @@ def query_endpoint(req: QueryRequest) -> QueryResponse:
         name=req.profile.capitalize(),
     )
 
-    # Run pipeline
+    # Run pipeline. ``apply_correction`` honours the UI choice: when the user
+    # opted to search exactly what they typed, the query is not spell-corrected.
     outcome = _pipeline.retrieve(
         query_text=req.query,
         top_k=req.top_k,
         user_profile=user_profile,
         force_web=req.force_web,
+        apply_correction=req.apply_correction,
     )
 
     # Convert results to JSON-serializable format
@@ -228,15 +232,22 @@ def query_endpoint(req: QueryRequest) -> QueryResponse:
 
     used_web_fallback = any(r.source_type == "web" for r in doc_results)
 
-    # Detect spell correction by re-running build_query (no side effects post-fit)
+    # Detect the *available* spell correction independently of whether it was
+    # applied to this search. We always force correction here (no side effects
+    # post-fit) so the UI can offer the user a choice in both directions:
+    #   - correction applied  → "search instead for what I typed"
+    #   - correction skipped   → "did you mean <correction>?"
     corrected_query: str | None = None
     try:
-        query_corpus = _pipeline.indexer.build_query(req.query)
+        query_corpus = _pipeline.indexer.build_query(req.query, apply_correction=True)
         corrected = query_corpus.corrected_text
         if corrected and corrected.strip() != req.query.strip().lower():
             corrected_query = corrected
     except Exception:
         pass
+
+    # Whether the retrieval that actually ran used the corrected query.
+    correction_applied = bool(req.apply_correction and corrected_query)
 
     # Extract RAG response text + provenance
     rag_text = ""
@@ -255,6 +266,7 @@ def query_endpoint(req: QueryRequest) -> QueryResponse:
         rag_response=rag_text,
         query_time_ms=elapsed_ms,
         corrected_query=corrected_query,
+        correction_applied=correction_applied,
         used_web_fallback=used_web_fallback,
         expansion_terms=outcome.expansion_terms,
         rag_quality=outcome.rag_quality,

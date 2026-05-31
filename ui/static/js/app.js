@@ -356,6 +356,48 @@ function extractSourceLabel(url) {
     }
 }
 
+/**
+ * Render the bidirectional spell-correction hint.
+ *
+ * @param {HTMLElement} hint       The #spell-hint container.
+ * @param {string} typedQuery      Exactly what the user typed.
+ * @param {string|null} correction The available correction, or null/empty.
+ * @param {boolean} applied        Whether retrieval used the correction.
+ *
+ * Two states, mirroring Google:
+ *   - applied  → "Mostrando resultados para «X». Buscar en su lugar «typed»"
+ *                clicking re-runs verbatim (apply_correction = false).
+ *   - !applied → "¿Quisiste decir «X»?"
+ *                clicking re-runs the same query corrected (apply_correction = true).
+ */
+function renderSpellHint(hint, typedQuery, correction, applied) {
+    hint.hidden = true;
+    hint.innerHTML = '';
+
+    const typed = (typedQuery || '').trim();
+    const corrected = (correction || '').trim();
+    if (!corrected || corrected === typed.toLowerCase()) {
+        return;
+    }
+
+    if (applied) {
+        hint.innerHTML = `Mostrando resultados para <strong>${escapeHtml(corrected)}</strong>. `
+            + `Buscar en su lugar: `
+            + `<button class="spell-suggestion" data-query="${escapeHtml(typed)}" data-correct="false">${escapeHtml(typed)}</button>`;
+    } else {
+        hint.innerHTML = `¿Quisiste decir: `
+            + `<button class="spell-suggestion" data-query="${escapeHtml(typed)}" data-correct="true">${escapeHtml(corrected)}</button>?`;
+    }
+    hint.hidden = false;
+
+    hint.querySelector('.spell-suggestion').addEventListener('click', e => {
+        const q = e.currentTarget.dataset.query;
+        const correct = e.currentTarget.dataset.correct === 'true';
+        document.getElementById('search-input').value = q;
+        executeQuery(q, { applyCorrection: correct });
+    });
+}
+
 function renderExpansion(terms) {
     const hint = document.getElementById('expansion-hint');
     if (!terms || terms.length === 0) {
@@ -566,8 +608,20 @@ async function showEvaluation() {
 // Query Execution
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function executeQuery(queryText) {
+async function executeQuery(queryText, options = {}) {
     if (!queryText.trim()) return;
+
+    // Spell-correction choice: an explicit override (from the "did you mean" /
+    // "search verbatim" links) wins; otherwise fall back to the toggle state.
+    const spellToggle = document.getElementById('spell-correct-toggle');
+    const applyCorrection = options.applyCorrection !== undefined
+        ? options.applyCorrection
+        : (spellToggle ? spellToggle.checked : true);
+    // Keep the toggle in sync when an explicit choice was made, so the UI
+    // honestly reflects what the next search will do.
+    if (options.applyCorrection !== undefined && spellToggle) {
+        spellToggle.checked = applyCorrection;
+    }
 
     const searchBtn = document.getElementById('search-btn');
     const resultsContainer = document.getElementById('results-container');
@@ -616,6 +670,7 @@ async function executeQuery(queryText) {
                 profile: currentProfile,
                 top_k: 5,
                 force_web: document.getElementById('force-web-toggle')?.checked ?? false,
+                apply_correction: applyCorrection,
             }),
         });
 
@@ -645,16 +700,10 @@ async function executeQuery(queryText) {
             resultsMeta.hidden = false;
         }
 
-        // Spell correction hint
-        if (data.corrected_query && data.corrected_query.trim() !== queryText.trim().toLowerCase()) {
-            spellHint.innerHTML = `¿Quisiste decir: <button class="spell-suggestion" data-query="${escapeHtml(data.corrected_query)}">${escapeHtml(data.corrected_query)}</button>?`;
-            spellHint.hidden = false;
-            spellHint.querySelector('.spell-suggestion').addEventListener('click', e => {
-                const q = e.currentTarget.dataset.query;
-                document.getElementById('search-input').value = q;
-                executeQuery(q);
-            });
-        }
+        // Spell correction hint — bidirectional (Google-style). The backend
+        // reports both the available correction and whether it was applied,
+        // so the user can always switch to the other interpretation.
+        renderSpellHint(spellHint, queryText, data.corrected_query, data.correction_applied);
 
         // Web fallback banner
         if (data.used_web_fallback) {

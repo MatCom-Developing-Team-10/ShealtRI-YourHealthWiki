@@ -374,15 +374,27 @@ class Pipeline:
         top_k: int = 5,
         user_profile: UserProfile | None = None,
         force_web: bool = False,
+        apply_correction: bool = True,
     ) -> PipelineResult:
         """Run the full query pipeline and return all stage outputs.
+
+        Args:
+            query_text: Raw query string from the user.
+            top_k: Number of results to return.
+            user_profile: Optional profile that tailors the RAG response.
+            force_web: When True, force the web-search fallback to fire.
+            apply_correction: When True (default), spell-correct the query
+                against the indexed vocabulary before retrieval. When False,
+                search exactly what the user typed (no spell correction).
 
         Returns:
             :class:`PipelineResult` bundling the retrieved documents, the
             RAG response (``None`` on failure), the terms added by the
             expansion plugin, and the RAG quality scores.
         """
-        query_corpus = self.indexer.build_query(query_text)
+        query_corpus = self.indexer.build_query(
+            query_text, apply_correction=apply_correction
+        )
         query = Query(text=query_text, indexed_corpus=query_corpus, user_profile=user_profile)
 
         # Microkernel flow (each hook is a no-op when no plugin is registered):

@@ -48,12 +48,14 @@ Método `build(documents) -> IndexedCorpus`:
 7. Devuelve un `IndexedCorpus` con vocabulario **ordenado** (determinismo de columnas en TF-IDF).
 8. Emite log INFO cada `log_progress_every` documentos.
 
-Método `build_query(query_text) -> IndexedCorpus`:
+Método `build_query(query_text, apply_correction=True) -> IndexedCorpus`:
 
 1. Procesa con `is_query=True` → corrige tokens contra el vocabulario ya acumulado.
 2. Cuenta tf del único "doc" (la query) con `Counter`.
 3. Construye `inverted_index[term] = [(0, tf)]`, que es exactamente lo que `TfidfProcessor.transform` espera al leer `postings[0][1]`.
 4. Empaqueta en un `IndexedCorpus` con un `Document` sintético (`doc_id="__query__"`) para satisfacer el invariante `len(documents) == len(processed_texts)`.
+
+**Parámetro `apply_correction`** (Corte 3): controla si la query se corrige ortográficamente. Con `True` (por defecto) se conserva el comportamiento clásico: los tokens fuera de vocabulario se reescriben al término más cercano del Trie y `corrected_text` queda poblado. Con `False` la query se procesa *verbatim* (igual se lematiza y se filtran stopwords/longitud, pero **no** se corrige) y `corrected_text` queda en `None`. Esto permite que la UI ofrezca al usuario elegir entre la query corregida o la que escribió tal cual. El flag se propaga `Pipeline.retrieve(apply_correction=...)` → `IndexerService.build_query(apply_correction=...)` → `TextProcessor.process(is_query=True, apply_correction=...)`. La detección de la *posible* corrección (para el aviso "¿quisiste decir?") es independiente: el backend siempre llama a `build_query(query, apply_correction=True)` una vez solo para inspeccionar `corrected_text`, sin efectos sobre la recuperación.
 
 Método `update(existing, new_documents) -> IndexedCorpus`:
 
