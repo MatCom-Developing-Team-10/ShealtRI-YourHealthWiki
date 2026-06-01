@@ -30,8 +30,10 @@ class HybridRanker(BaseRanker):
     """Re-ranks documents using a weighted combination of BM25 and LSI scores.
 
     Both score distributions are min-max normalized to [0, 1] before fusion so
-    that neither signal dominates due to scale differences.  The combined score
-    replaces the original LSI score on each returned document.
+    that neither signal dominates due to scale differences. The combined score
+    drives the *order* of results, but the LSI similarity score on each
+    document is preserved so the UI shows the absolute similarity to the
+    query (not an artefact of min-max where the worst doc always lands at 0%).
 
     Args:
         lsi_weight: Weight for the LSI (dense) similarity score. Default 0.6.
@@ -68,9 +70,10 @@ class HybridRanker(BaseRanker):
             documents: Documents from the retriever in their original LSI order.
 
         Returns:
-            Documents reordered by descending hybrid score.  Each document's
-            ``score`` field is updated to the combined value so the RAG module
-            and UI can display a meaningful relevance indicator.
+            Documents reordered by descending hybrid score. Each document
+            preserves its original LSI similarity score so the UI surfaces
+            the absolute similarity to the query rather than a normalized
+            rank position.
         """
         if not documents:
             return documents
@@ -87,17 +90,18 @@ class HybridRanker(BaseRanker):
         bm25_norm = self._min_max_normalize(bm25_scores)
         lsi_norm = self._min_max_normalize(lsi_scores)
 
-        reranked: list[RetrievedDocument] = []
-        for idx, doc in enumerate(documents):
-            combined = (
-                self._lsi_weight * lsi_norm[idx]
-                + self._bm25_weight * bm25_norm[idx]
+        # Hybrid score drives ordering only; the LSI score on each document
+        # is kept intact for display (min-max would otherwise pin the worst
+        # doc to 0% regardless of its absolute similarity).
+        scored = [
+            (
+                self._lsi_weight * lsi_norm[idx] + self._bm25_weight * bm25_norm[idx],
+                doc,
             )
-            reranked.append(
-                RetrievedDocument(document=doc.document, score=combined)
-            )
-
-        reranked.sort(key=lambda d: d.score, reverse=True)
+            for idx, doc in enumerate(documents)
+        ]
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        reranked = [doc for _, doc in scored]
 
         logger.debug(
             "HybridRanker: re-ranked %d documents for query %r",

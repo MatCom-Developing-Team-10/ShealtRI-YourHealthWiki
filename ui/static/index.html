@@ -11,39 +11,14 @@
         <!-- LEFT SIDEBAR: Navigation + Profile selector -->
         <aside class="sidebar">
             <nav class="sidebar-nav">
-                <div class="nav-item">
-                    <span class="nav-icon">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
-                        </svg>
-                    </span>
-                    <span class="nav-label">Enciclopedia</span>
-                </div>
-                <button id="nav-historial" class="nav-item nav-item-btn">
-                    <span class="nav-icon">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-                        </svg>
-                    </span>
-                    <span class="nav-label">Historial</span>
-                </button>
                 <button id="nav-biblioteca" class="nav-item nav-item-btn">
                     <span class="nav-icon">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>
                         </svg>
                     </span>
-                    <span class="nav-label">Biblioteca</span>
+                    <span class="nav-label">Evaluación</span>
                 </button>
-                <div class="nav-item">
-                    <span class="nav-icon">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="3"/>
-                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                        </svg>
-                    </span>
-                    <span class="nav-label">Ajustes</span>
-                </div>
             </nav>
 
             <div class="profile-selector">
@@ -85,7 +60,7 @@
                     Corregir ortografía
                 </label>
                 <label class="web-toggle" id="web-toggle-label">
-                    <input type="checkbox" id="force-web-toggle">
+                    <input type="checkbox" id="force-web-toggle" checked>
                     <span class="web-toggle-track"><span class="web-toggle-thumb"></span></span>
                     <svg class="web-toggle-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
                          stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -98,24 +73,24 @@
             </div>
 
             <div id="spell-hint" class="spell-hint" hidden></div>
+            <div id="expansion-hint" class="expansion-hint" hidden></div>
             <div id="results-meta" class="results-meta" hidden></div>
             <div id="web-fallback-banner" class="web-fallback-banner" hidden>
                 Resultados complementados con búsqueda web
-            </div>
-
-            <!-- Historial overlay -->
-            <div id="historial-panel" class="historial-panel" hidden>
-                <div class="historial-header">
-                    <span>Búsquedas recientes</span>
-                    <button id="historial-close" class="historial-close" aria-label="Cerrar historial">✕</button>
-                </div>
-                <div id="historial-list" class="historial-list"></div>
             </div>
 
             <div id="results-container" class="results-container">
                 <div class="results-placeholder">
                     <p>Ingresa una consulta para comenzar</p>
                 </div>
+            </div>
+
+            <div id="recommendations-panel" class="recommendations-panel" hidden>
+                <div class="recommendations-header">
+                    <span class="recommendations-icon">✨</span>
+                    <span class="recommendations-title">También te puede interesar</span>
+                </div>
+                <div id="recommendations-list" class="recommendations-list"></div>
             </div>
         </main>
 
@@ -160,12 +135,16 @@
                     </video>
                 </div>
 
+                <div id="rag-meta" class="rag-meta" hidden></div>
                 <div id="rag-response" class="rag-response">
                     <p class="response-placeholder">La respuesta aparecerá aquí</p>
                 </div>
+                <div id="rag-quality" class="rag-quality" hidden></div>
             </div>
         </aside>
     </div>
+
+    <footer id="stats-footer" class="stats-footer" hidden></footer>
 
     <script src="https://cdn.jsdelivr.net/npm/marked@13/marked.min.js"></script>
     <script src="/static/js/app.js"></script>
