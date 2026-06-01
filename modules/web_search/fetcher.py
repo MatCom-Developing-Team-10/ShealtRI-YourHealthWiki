@@ -45,6 +45,11 @@ _USER_AGENT = (
     "educational use only)"
 )
 
+# Over-fetch pool: ask DDG for more URLs than the caller wants so we still hit
+# the target count after the inevitable per-page losses (JS-only pages, 403s,
+# parser failures, snippets shorter than ``min_text_length``).
+_FETCH_POOL_SIZE = 15
+
 
 class WebContentFetcher:
     """Searches DuckDuckGo and fetches page content for a text query.
@@ -103,7 +108,8 @@ class WebContentFetcher:
             logger.warning("WebContentFetcher.fetch: empty query, returning []")
             return []
 
-        search_results = self._search_duckduckgo(query, max_results)
+        pool_size = max(_FETCH_POOL_SIZE, max_results)
+        search_results = self._search_duckduckgo(query, pool_size)
         if not search_results:
             logger.warning(
                 "WebContentFetcher: no DuckDuckGo results for query='%s'", query
@@ -136,11 +142,13 @@ class WebContentFetcher:
             ]
             documents = [doc for f in futures if (doc := _safe_result(f)) is not None]
 
+        # Trim to the caller's budget, preserving DDG rank order.
+        kept = documents[:max_results]
         logger.info(
-            "WebContentFetcher: fetched %d/%d pages for query='%s'",
-            len(documents), len(search_results), query,
+            "WebContentFetcher: fetched %d/%d pages, returning %d for query='%s'",
+            len(documents), len(search_results), len(kept), query,
         )
-        return documents
+        return kept
 
     # ------------------------------------------------------------------
     # Private helpers
