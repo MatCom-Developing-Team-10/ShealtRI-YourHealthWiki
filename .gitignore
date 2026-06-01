@@ -214,6 +214,8 @@ data/pdf/
 !data/pdf/.gitkeep
 data/pdfs/
 !data/pdfs/.gitkeep
+data/pdf_reconstructed/
+!data/pdf_reconstructed/.gitkeep
 data/chroma/
 !data/chroma/.gitkeep
 data/documents/

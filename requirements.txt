@@ -41,3 +41,6 @@ pydantic>=2.0.0
 
 # Ranking
 rank-bm25>=0.2.2             # BM25 scoring for hybrid re-ranking
+
+# PDF reconstruction (fallback when source PDF is missing)
+reportlab>=4.0.0             # Generate text-only PDF from indexed chunks

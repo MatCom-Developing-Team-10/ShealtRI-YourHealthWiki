@@ -11,14 +11,6 @@
         <!-- LEFT SIDEBAR: Navigation + Profile selector -->
         <aside class="sidebar">
             <nav class="sidebar-nav">
-                <button id="nav-historial" class="nav-item nav-item-btn">
-                    <span class="nav-icon">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-                        </svg>
-                    </span>
-                    <span class="nav-label">Historial</span>
-                </button>
                 <button id="nav-biblioteca" class="nav-item nav-item-btn">
                     <span class="nav-icon">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -68,7 +60,7 @@
                     Corregir ortografía
                 </label>
                 <label class="web-toggle" id="web-toggle-label">
-                    <input type="checkbox" id="force-web-toggle">
+                    <input type="checkbox" id="force-web-toggle" checked>
                     <span class="web-toggle-track"><span class="web-toggle-thumb"></span></span>
                     <svg class="web-toggle-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
                          stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -85,15 +77,6 @@
             <div id="results-meta" class="results-meta" hidden></div>
             <div id="web-fallback-banner" class="web-fallback-banner" hidden>
                 Resultados complementados con búsqueda web
-            </div>
-
-            <!-- Historial overlay -->
-            <div id="historial-panel" class="historial-panel" hidden>
-                <div class="historial-header">
-                    <span>Búsquedas recientes</span>
-                    <button id="historial-close" class="historial-close" aria-label="Cerrar historial">✕</button>
-                </div>
-                <div id="historial-list" class="historial-list"></div>
             </div>
 
             <div id="results-container" class="results-container">
