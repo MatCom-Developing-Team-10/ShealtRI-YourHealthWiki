@@ -413,8 +413,8 @@ def stats_endpoint() -> StatsResponse:
     """Corpus / model diagnostics for the UI footer."""
     raw = _pipeline.stats()
     lsi_k = 0
-    if _pipeline.lsi is not None and _pipeline.lsi.svd is not None:
-        lsi_k = int(_pipeline.lsi.svd.n_components)
+    if _pipeline.lsi is not None and _pipeline.lsi.model is not None:
+        lsi_k = int(_pipeline.lsi.model.n_components)
 
     # Total feedback judgments recorded so far across all queries.
     judgments = len(_pipeline.feedback_service.store)
