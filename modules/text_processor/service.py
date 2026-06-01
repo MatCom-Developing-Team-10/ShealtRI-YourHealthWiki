@@ -48,6 +48,9 @@ class TextProcessorConfig:
             Keep False for Spanish to preserve meaning (año vs ano).
         lowercase: Whether to convert to lowercase (default: True).
         custom_stopwords: Additional stopwords to remove beyond defaults.
+        batch_size: Number of documents fed to spaCy's ``nlp.pipe`` per batch
+            when processing a collection (default: 64). Larger batches improve
+            throughput on big corpora at the cost of higher peak memory.
     """
 
     language: str = "spanish"
@@ -57,6 +60,7 @@ class TextProcessorConfig:
     remove_accents: bool = False
     lowercase: bool = True
     custom_stopwords: set[str] = field(default_factory=set)
+    batch_size: int = 64
 
 
 class TextProcessor:
@@ -112,6 +116,7 @@ class TextProcessor:
 
         self._stopwords = self._load_stopwords()
         self.spell_checker: TrieSpellChecker = TrieSpellChecker()
+        self._last_corrections: dict[str, str] = {}
 
         logger.debug(
             f"TextProcessor initialized: language={self.config.language}, "
@@ -145,49 +150,142 @@ class TextProcessor:
 
         return combined
 
-    def process(self, text: str, is_query: bool = False) -> str:
-        """Apply the full preprocessing pipeline to a text.
+    def process(
+        self, text: str, is_query: bool = False, apply_correction: bool = True
+    ) -> str:
+        """Apply the full preprocessing pipeline to a single text.
 
         Pipeline flow:
             1. Normalize (lowercase, unicode, cleaning)
-            2. Tokenize (split into tokens)
-            3. Remove stopwords
-            4. Lemmatize (reduce to base form)
-            5. Filter tokens (length constraints)
-            6. If is_query=False: add tokens to spell checker vocabulary
+            2. Tokenize + lemmatize in a single spaCy pass
+            3. Remove stopwords (by surface form) and filter by length
+            4. If is_query=False: add tokens to spell checker vocabulary
                If is_query=True: correct tokens using known vocabulary
+               (unless apply_correction=False, see below)
+
+        For indexing many documents at once, prefer :meth:`process_many`, which
+        batches the spaCy pipeline and is substantially faster.
 
         Args:
             text: Raw input text.
             is_query: If False, tokens are added to spell checker vocabulary.
                       If True, tokens are corrected using the vocabulary.
+            apply_correction: Only relevant when ``is_query=True``. When False,
+                the query is processed verbatim (lemmatized/filtered as usual)
+                but spell correction is skipped, so the user's original wording
+                is preserved. Ignored on the indexing path.
 
         Returns:
             Space-joined preprocessed tokens ready for indexer.
         """
-        if not text or not text.strip():
-            return ""
+        return self.process_many(
+            [text], is_query=is_query, apply_correction=apply_correction
+        )[0]
 
-        normalized = self.normalize(text)
-        tokens = self.tokenize(normalized)
-        tokens = self.remove_stopwords(tokens)
-        tokens = self.lemmatize(tokens)
-        tokens = self.filter_tokens(tokens)
+    def process_many(
+        self,
+        texts: list[str],
+        is_query: bool = False,
+        apply_correction: bool = True,
+    ) -> list[str]:
+        """Preprocess a batch of texts using spaCy's batched ``nlp.pipe``.
 
-        if is_query:
-            # Correct tokens using known vocabulary
-            tokens = self._correct_spelling(tokens)
-        else:
-            # Add tokens to vocabulary for future corrections
-            self._add_to_vocabulary(tokens)
+        This is the throughput-oriented entry point used by the indexer. It
+        runs the spaCy pipeline once per batch (rather than once per call) and,
+        for the indexing path, inserts the deduplicated vocabulary into the
+        spell checker in a single pass at the end.
 
-        return " ".join(tokens)
+        Each output aligns positionally with its input: ``texts[i]`` produces
+        ``result[i]``. Empty or whitespace-only inputs yield ``""``.
 
-    def _add_to_vocabulary(self, tokens: list[str]) -> None:
+        Args:
+            texts: Raw input texts.
+            is_query: If False, surviving tokens populate the spell checker
+                vocabulary. If True, tokens are corrected against it.
+            apply_correction: Only relevant when ``is_query=True``. When False,
+                spell correction is skipped so the query keeps the user's
+                original wording. Ignored on the indexing path.
+
+        Returns:
+            One space-joined token string per input text, in the same order.
+        """
+        if not texts:
+            return []
+
+        normalized = [self.normalize(text) if text else "" for text in texts]
+
+        results: list[str] = []
+        vocabulary_tokens: set[str] = set()
+
+        for doc in self._nlp.pipe(normalized, batch_size=self.config.batch_size):
+            tokens = self._extract_tokens(doc)
+            if is_query:
+                if apply_correction:
+                    tokens = self._correct_spelling(tokens)
+                else:
+                    # User opted out of correction: keep tokens verbatim and
+                    # clear any corrections recorded by a previous call so
+                    # get_last_corrections() reflects this run honestly.
+                    self._last_corrections = {}
+            else:
+                vocabulary_tokens.update(tokens)
+            results.append(" ".join(tokens))
+
+        if not is_query and vocabulary_tokens:
+            self._add_to_vocabulary(vocabulary_tokens)
+
+        return results
+
+    def lemmatize(self, tokens: list[str]) -> list[str]:
+        """Return the spaCy lemma for each input token, preserving order.
+
+        Exposes the lemmatizer in isolation from the rest of the pipeline
+        (no stopword removal, no spell correction, no length filtering).
+        Multi-word inputs are tokenised by spaCy and their lemmas are
+        concatenated with a space, so callers always get exactly one output
+        string per input string.
+        """
+        if not tokens:
+            return []
+        lemmas: list[str] = []
+        for doc in self._nlp.pipe(tokens, batch_size=self.config.batch_size):
+            lemmas.append(" ".join(t.lemma_ for t in doc))
+        return lemmas
+
+    def _extract_tokens(self, doc: "spacy.tokens.Doc") -> list[str]:
+        """Turn a spaCy ``Doc`` into the final list of indexable tokens.
+
+        Performs stopword removal (matched against the surface form, as the
+        original pipeline did), lemmatization, and length filtering in a single
+        traversal — replacing the previous tokenize → lemmatize double pass.
+
+        Args:
+            doc: A spaCy ``Doc`` produced from already-normalized text.
+
+        Returns:
+            Lemmatized tokens that are neither stopwords nor out of the
+            configured length bounds.
+        """
+        min_len = self.config.min_token_length
+        max_len = self.config.max_token_length
+        stopwords = self._stopwords
+
+        tokens: list[str] = []
+        for token in doc:
+            if token.text in stopwords:
+                continue
+            lemma = token.lemma_
+            if min_len <= len(lemma) <= max_len:
+                tokens.append(lemma)
+        return tokens
+
+    def _add_to_vocabulary(self, tokens: set[str]) -> None:
         """Add tokens to the spell checker vocabulary.
 
         Args:
-            tokens: List of processed tokens to add.
+            tokens: Deduplicated processed tokens to insert. The caller
+                (:meth:`process_many`) already accumulates a set, so no further
+                deduplication is performed here.
         """
         for token in tokens:
             self.spell_checker._insert(token)
@@ -201,13 +299,24 @@ class TextProcessor:
         Returns:
             List of tokens with spelling corrections applied.
         """
+        self._last_corrections = {}
         corrected = []
         for token in tokens:
             correction = self.spell_checker.correct(token)
-            # Use correction if found, otherwise keep the original token
-            corrected.append(correction if correction else token)
+            result = correction if correction else token
+            if result != token:
+                self._last_corrections[token] = result
+            corrected.append(result)
 
         return corrected
+
+    def get_last_corrections(self) -> dict[str, str]:
+        """Return corrections made by the most recent _correct_spelling call.
+
+        Returns:
+            Mapping of original_token -> corrected_token for changed tokens only.
+        """
+        return dict(self._last_corrections)
 
     def normalize(self, text: str) -> str:
         """Normalize text by applying lowercase, unicode normalization, and cleaning.
@@ -244,71 +353,6 @@ class TextProcessor:
         text = re.sub(r"\s+", " ", text).strip()
 
         return text
-
-    def tokenize(self, text: str) -> list[str]:
-        """Tokenize normalized text using spaCy.
-
-        Args:
-            text: Normalized text input.
-
-        Returns:
-            List of tokens.
-        """
-        doc = self._nlp(text)
-        return [token.text for token in doc]
-
-    def remove_stopwords(self, tokens: list[str]) -> list[str]:
-        """Remove stopwords from token list.
-
-        Args:
-            tokens: List of tokens.
-
-        Returns:
-            Filtered token list without stopwords.
-        """
-        return [t for t in tokens if t not in self._stopwords]
-
-    def lemmatize(self, tokens: list[str]) -> list[str]:
-        """Apply lemmatization to tokens using spaCy.
-
-        Uses spaCy's lemmatizer with POS tagging for accurate lemmatization:
-            - medicamentos → medicamento
-            - hipertensión → hipertensión (preserved)
-            - arterial → arterial (preserved as adjective)
-            - causa → causar (verb infinitive)
-
-        Args:
-            tokens: List of tokens.
-
-        Returns:
-            List of lemmatized tokens.
-
-        Note:
-            Unlike stemming, lemmatization preserves valid word forms and is
-            more suitable for medical terminology where precision matters.
-        """
-        # Process tokens as a single document for POS tagging context
-        text = " ".join(tokens)
-        doc = self._nlp(text)
-        return [token.lemma_ for token in doc]
-
-    def filter_tokens(self, tokens: list[str]) -> list[str]:
-        """Filter tokens by length constraints.
-
-        Removes tokens that are:
-            - Too short (< min_token_length)
-            - Too long (> max_token_length)
-
-        Args:
-            tokens: List of tokens.
-
-        Returns:
-            Filtered token list.
-        """
-        return [
-            t for t in tokens
-            if self.config.min_token_length <= len(t) <= self.config.max_token_length
-        ]
 
     @staticmethod
     def _strip_accents(text: str) -> str:

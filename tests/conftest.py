@@ -70,6 +70,13 @@ class InMemoryRepository(BaseRepository):
             else:
                 self._vectors.append([])
 
+    def get_embedding(self, doc_id):
+        try:
+            idx = self._ids.index(doc_id)
+        except ValueError:
+            return None
+        return list(self._vectors[idx])
+
     def search_similar(self, query_vector, top_k=10):
         import math
 

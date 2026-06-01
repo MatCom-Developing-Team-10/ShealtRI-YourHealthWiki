@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from core.models import Query, Document, RetrievedDocument, RAGResponse
+from core.models import Query, Document, RetrievedDocument, RAGResponse, PipelineContext
 
 
 # ---------------------------------------------------------------------------
@@ -34,6 +34,7 @@ class IndexedCorpus:
     processed_texts: list[str]
     inverted_index: dict[str, list[tuple[int, int]]]
     vocabulary: list[str]
+    corrected_text: str | None = None
 
     def __post_init__(self) -> None:
         if len(self.documents) != len(self.processed_texts):
@@ -162,6 +163,22 @@ class BaseRepository(ABC):
         """
         raise NotImplementedError
 
+    def get_embedding(self, doc_id: str) -> list[float] | None:
+        """Return the stored embedding for ``doc_id``, or None if unknown.
+
+        Used by feedback algorithms (Rocchio) that need the latent vector
+        of specific documents to nudge the query vector toward / away from
+        them. Default implementation raises NotImplementedError; subclasses
+        should override when they have efficient embedding lookup.
+
+        Args:
+            doc_id: Document identifier.
+
+        Returns:
+            Latent vector if the doc is known, ``None`` otherwise.
+        """
+        raise NotImplementedError("Embedding lookup not supported by this repository")
+
     @abstractmethod
     def search_similar(self, query_vector: list[float], top_k: int = 10) -> list[tuple[str, float]]:
         """Search for documents similar to the given vector.
@@ -257,5 +274,49 @@ class BaseRAG(ABC):
 
         Returns:
             RAGResponse with the generated answer and provenance metadata.
+        """
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
+# Optional plugin contract (microkernel extension points)
+# ---------------------------------------------------------------------------
+
+
+class Plugin(ABC):
+    """Contract for optional pipeline plugins (microkernel architecture).
+
+    Plugins extend the pipeline at well-known hook points without the core
+    importing them directly. Each plugin declares the hook it attaches to and
+    transforms the shared :class:`~core.models.PipelineContext` in place (or
+    returns a new one). If a plugin is never registered, the pipeline behaves
+    exactly as if it did not exist.
+
+    Recognised hooks:
+        - ``pre_retrieval``  — runs before the retriever (e.g. query expansion).
+        - ``post_retrieval`` — runs after retrieval, before ranking.
+        - ``post_ranking``   — runs after ranking, before answer generation.
+    """
+
+    @abstractmethod
+    def hook_name(self) -> str:
+        """Return the hook this plugin attaches to.
+
+        Returns:
+            One of ``"pre_retrieval"``, ``"post_retrieval"``, ``"post_ranking"``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def execute(self, context: PipelineContext) -> PipelineContext:
+        """Transform the pipeline context at this plugin's hook point.
+
+        Args:
+            context: The shared pipeline context. Plugins read/modify
+                ``context.query``, ``context.results``, and record what they
+                did under ``context.metadata``.
+
+        Returns:
+            The (possibly mutated) context for the next stage.
         """
         raise NotImplementedError

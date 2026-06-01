@@ -24,7 +24,8 @@ class _FakeTextProcessor:
     """Minimal stand-in for TextProcessor.
 
     Implements only the interface IndexerService relies on:
-        - .process(text, is_query) -> str
+        - .process(text, is_query, apply_correction) -> str
+        - .process_many(texts, is_query, apply_correction) -> list[str]
         - .spell_checker (any object with words()/correct())
     """
 
@@ -32,22 +33,37 @@ class _FakeTextProcessor:
         self.spell_checker = TrieSpellChecker()
         self.calls: list[tuple[str, bool]] = []
 
-    def process(self, text: str, is_query: bool = False) -> str:
+    def process(
+        self, text: str, is_query: bool = False, apply_correction: bool = True
+    ) -> str:
         self.calls.append((text, is_query))
         text = text.strip().lower()
         if not text:
             return ""
         tokens = text.split()
         if is_query:
-            corrected = []
-            for tok in tokens:
-                fix = self.spell_checker.correct(tok)
-                corrected.append(fix if fix else tok)
-            tokens = corrected
+            if apply_correction:
+                corrected = []
+                for tok in tokens:
+                    fix = self.spell_checker.correct(tok)
+                    corrected.append(fix if fix else tok)
+                tokens = corrected
+            # apply_correction=False: leave the query tokens verbatim.
         else:
             for tok in tokens:
                 self.spell_checker._insert(tok)
         return " ".join(tokens)
+
+    def process_many(
+        self,
+        texts: list[str],
+        is_query: bool = False,
+        apply_correction: bool = True,
+    ) -> list[str]:
+        return [
+            self.process(text, is_query=is_query, apply_correction=apply_correction)
+            for text in texts
+        ]
 
 
 # ---------------------------------------------------------------------------

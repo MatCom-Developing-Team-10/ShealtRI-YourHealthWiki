@@ -1,8 +1,9 @@
-"""Synthetic Spanish medical documents for testing and local development.
+"""Synthetic Spanish medical documents used as test fixtures.
 
-These 20 documents cover major medical topics and are used by:
-    - tests/conftest.py  (pytest fixtures)
-    - cli.py             (fallback corpus when data/raw/ is empty)
+These 20 short documents cover major medical topics and keep the unit
+tests fast by avoiding any real corpus I/O.  Consumed only by
+``tests/conftest.py``; the production app loads real documents from
+``data/raw/``.
 """
 
 from __future__ import annotations

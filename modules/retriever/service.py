@@ -12,7 +12,7 @@ Retrieval flow:
 from __future__ import annotations
 
 from core.interfaces import BaseRetriever, BaseRepository, DocumentStore, IndexedCorpus
-from core.models import Query, RetrievedDocument
+from core.models import Document, Query, RetrievedDocument
 
 from .lsi_model import LSIModel
 from .tfidf_processor import TfidfProcessor
@@ -42,6 +42,7 @@ class LSIRetriever(BaseRetriever):
         model_dir: str = "models/lsi",
         n_components: int = 100,
         similarity_threshold: float | None = None,
+        feedback_service: "RelevanceFeedbackService | None" = None,
     ) -> None:
         """Initialize with repository, document store, and hyper-parameters.
 
@@ -53,6 +54,11 @@ class LSIRetriever(BaseRetriever):
             similarity_threshold: Minimum similarity score (0-1) for results.
                 Results below this threshold are filtered out. If None, uses
                 DEFAULT_SIMILARITY_THRESHOLD (0.25).
+            feedback_service: Optional
+                :class:`~plugins.feedback.RelevanceFeedbackService`. When
+                provided, the latent query vector is re-weighted via Rocchio
+                using any judgments the user has previously recorded for
+                this query text. When None, retrieval is unchanged.
         """
         self.repository = repository
         self.document_store = document_store
@@ -63,10 +69,17 @@ class LSIRetriever(BaseRetriever):
             if similarity_threshold is not None
             else self.DEFAULT_SIMILARITY_THRESHOLD
         )
+        self.feedback_service = feedback_service
 
         # Sub-components — initialized during fit or load
         self.tfidf: TfidfProcessor | None = None
         self.model: LSIModel | None = None
+
+        # Dynamic-indexing counters (Conf_2): how many documents were folded in
+        # since the last full fit. Used by needs_rebalance() to flag when a
+        # refit ("balanceo") is warranted to recapture new vocabulary.
+        self._base_doc_count = 0
+        self._incremental_doc_count = 0
 
     # ------------------------------------------------------------------
     # Training
@@ -98,6 +111,99 @@ class LSIRetriever(BaseRetriever):
 
         # 4. Store vectors in vector repository (IDs + embeddings + URLs)
         self.repository.add_documents(corpus.documents, embeddings=embeddings)
+
+        # A full fit resets the dynamic-indexing counters: every document is now
+        # part of the base index built from the current vocabulary.
+        self._base_doc_count = len(corpus.documents)
+        self._incremental_doc_count = 0
+
+    # ------------------------------------------------------------------
+    # Dynamic indexing (Conf_2 — actualización dinámica)
+    # ------------------------------------------------------------------
+
+    def add_documents(self, corpus: IndexedCorpus) -> int:
+        """Incrementally index new documents via LSI folding-in.
+
+        Implements the "Incremental" path of dynamic indexing from the lecture
+        (Conf_2): new documents are added *without* re-fitting the SVD. Each
+        document is weighted with the existing IDF, projected onto the existing
+        latent basis, and appended to the vector repository and document store.
+
+        Terms not present in the fitted vocabulary are ignored (folding-in
+        limitation). When too many documents have been folded in, call
+        :meth:`needs_rebalance` and, if it returns True, rebuild with
+        :meth:`fit` to recapture the new vocabulary ("Balanceo").
+
+        Args:
+            corpus: IndexedCorpus of the *new* documents only, built by the
+                indexer with the same TextProcessor used for the base corpus.
+
+        Returns:
+            Number of documents added.
+
+        Raises:
+            RuntimeError: If the retriever has not been fitted or loaded.
+        """
+        if self.tfidf is None or self.model is None:
+            raise RuntimeError(
+                "Retriever must be fitted or loaded before add_documents()."
+            )
+
+        if not corpus.documents:
+            return 0
+
+        # Folding-in: TF-IDF with fixed vocabulary/IDF, then project onto the
+        # existing latent space (no SVD re-fit). Row i of the matrix (and of the
+        # resulting embeddings) aligns positionally with corpus.documents[i].
+        tfidf_matrix = self.tfidf.transform_corpus(corpus)
+        embeddings = self.model.project_documents(tfidf_matrix)
+
+        # Defense-in-depth: only append genuinely new documents. ChromaDB.add
+        # upserts, so re-adding an existing id would silently overwrite its
+        # well-fitted vector with an inferior folded-in approximation. Filtering
+        # by position keeps each document aligned with its embedding row.
+        new_documents: list[Document] = []
+        new_embeddings: list[list[float]] = []
+        for doc, embedding in zip(corpus.documents, embeddings):
+            if self.document_store.exists(doc.doc_id):
+                continue
+            new_documents.append(doc)
+            new_embeddings.append(embedding)
+
+        if not new_documents:
+            return 0
+
+        # Append to both stores (ChromaDB.add is incremental — existing vectors
+        # are untouched).
+        self.document_store.add_documents(new_documents)
+        self.repository.add_documents(new_documents, embeddings=new_embeddings)
+
+        self._incremental_doc_count += len(new_documents)
+        return len(new_documents)
+
+    @property
+    def incremental_fraction(self) -> float:
+        """Fraction of the index added by folding-in since the last full fit."""
+        total = self._base_doc_count + self._incremental_doc_count
+        if total == 0:
+            return 0.0
+        return self._incremental_doc_count / total
+
+    def needs_rebalance(self, threshold: float = 0.2) -> bool:
+        """Whether a full refit ("balanceo") is warranted.
+
+        Returns True once the share of folded-in documents exceeds *threshold*.
+        Past that point the fixed vocabulary increasingly fails to represent the
+        newer documents, so rebuilding with :meth:`fit` restores retrieval
+        quality.
+
+        Args:
+            threshold: Incremental-fraction cut-off in [0, 1]. Default 0.2 (20%).
+
+        Returns:
+            True if ``incremental_fraction > threshold``.
+        """
+        return self.incremental_fraction > threshold
 
     # ------------------------------------------------------------------
     # Query
@@ -154,6 +260,21 @@ class LSIRetriever(BaseRetriever):
         # Phase 1: Vector similarity search
         query_tfidf = self.tfidf.transform(query.indexed_corpus)
         query_vector = self.model.project_query(query_tfidf)
+
+        # Apply explicit relevance feedback (Rocchio) when a feedback service
+        # is wired and the user has previously judged docs for this query.
+        # No-op when feedback_service is None or no judgments exist.
+        if self.feedback_service is not None:
+            try:
+                query_vector = self.feedback_service.apply_to_query(
+                    query.text,
+                    query_vector,
+                    self.repository.get_embedding,
+                )
+            except NotImplementedError:
+                # Repository does not expose embedding lookup — silently
+                # skip feedback rather than crash retrieval.
+                pass
 
         # Get ranked (doc_id, score) pairs from vector DB
         results = self.repository.search_similar(query_vector, top_k=top_k)
@@ -212,6 +333,7 @@ class LSIRetriever(BaseRetriever):
         document_store: DocumentStore,
         model_dir: str = "models/lsi",
         similarity_threshold: float | None = None,
+        feedback_service: "RelevanceFeedbackService | None" = None,
     ) -> "LSIRetriever":
         """Restore a fitted retriever from persisted artifacts.
 
@@ -223,6 +345,9 @@ class LSIRetriever(BaseRetriever):
             model_dir: Directory containing saved artifacts.
             similarity_threshold: Minimum similarity score for results.
                 If None, uses DEFAULT_SIMILARITY_THRESHOLD.
+            feedback_service: Optional Rocchio feedback service, forwarded
+                to the constructor so warm-started retrievers behave like
+                freshly fitted ones.
 
         Returns:
             Ready-to-use ``LSIRetriever`` instance.
@@ -232,8 +357,13 @@ class LSIRetriever(BaseRetriever):
             document_store=document_store,
             model_dir=model_dir,
             similarity_threshold=similarity_threshold,
+            feedback_service=feedback_service,
         )
         instance.tfidf = TfidfProcessor.load(model_dir)
         instance.model = LSIModel.load(model_dir)
+        # Treat the persisted corpus as the base index so the dynamic-indexing
+        # counters start from the right denominator.
+        instance._base_doc_count = instance.tfidf.n_docs
+        instance._incremental_doc_count = 0
         return instance
 

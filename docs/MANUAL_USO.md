@@ -6,9 +6,10 @@
 2. [Instalación con Docker](#instalación-con-docker)
 3. [Gestión del Corpus](#gestión-del-corpus)
 4. [Uso de la Interfaz de Consola](#uso-de-la-interfaz-de-consola)
-5. [Ejemplos Prácticos](#ejemplos-prácticos)
-6. [Solución de Problemas](#solución-de-problemas)
-7. [Arquitectura del Proyecto](#arquitectura-del-proyecto)
+5. [Interfaz Web (Corte 3)](#interfaz-web-corte-3)
+6. [Ejemplos Prácticos](#ejemplos-prácticos)
+7. [Solución de Problemas](#solución-de-problemas)
+8. [Arquitectura del Proyecto](#arquitectura-del-proyecto)
 
 ---
 
@@ -644,14 +645,129 @@ services:
 
 ---
 
+## Interfaz Web (Corte 3)
+
+La UI web sirve la SPA desde `ui/static/` y expone los endpoints HTTP que
+consume el frontend. Para arrancarla en local:
+
+```bash
+# Local (requiere requirements-ui.txt + dependencias de runtime)
+uvicorn ui.app:app --host 0.0.0.0 --port 8501
+
+# Docker
+docker-compose up --build
+```
+
+Abrir `http://localhost:8501` en el navegador.
+
+### Selector de perfil
+
+Seis perfiles disponibles, cada uno cambia el tono y el nivel técnico de
+la respuesta RAG (no afecta el ranking — el ranking permanece objetivo).
+
+- **Paciente**: lenguaje llano, evita jerga.
+- **Estudiante de medicina**: explicaciones con detalle pedagógico.
+- **Profesional médico**: terminología técnica completa.
+- **Diagnóstico médico**: enfoque diferencial, hipótesis ordenadas.
+- **Medicina natural o tradicional**: integra perspectivas complementarias.
+- **Cuidador/Familiar**: foco en cuidados prácticos y signos de alarma.
+
+### Búsqueda
+
+Escribe la query en lenguaje natural y presiona **Buscar** o Enter. La UI
+muestra cinco bloques de información:
+
+1. **¿Quisiste decir …?** — si el spell-checker (Trie sobre el
+   vocabulario) detectó una palabra fuera de vocabulario, sugiere la
+   corrección con un click.
+2. **También buscamos …** — términos añadidos por el plugin de expansión
+   de tesauro médico (ej. `hipertensión` → `hta`, `presión arterial`).
+3. **Tarjetas de resultados** — top-K documentos con título, fragmento
+   contextualizado a la query, badge de origen (local/web) y barra de
+   relevancia. Click abre la fuente original.
+4. **Banner azul "complementado con búsqueda web"** — aparece cuando el
+   `FallbackRetriever` se activa por bajo score del LSI.
+5. **También te puede interesar** — panel de tres recomendaciones
+   basadas en similitud LSI sobre los seeds (top-3 resultados).
+
+### Toggle "Incluir resultados web"
+
+Casilla bajo el buscador. Cuando está activa, fuerza el fallback web
+(útil para queries fuera del corpus académico). Por defecto, el fallback
+solo se dispara automáticamente cuando ningún documento local supera el
+umbral `min_score=0.35`.
+
+### Retroalimentación con 👍 / 👎 (Rocchio)
+
+Cada tarjeta tiene dos botones de feedback. Al votar:
+
+- El juicio se persiste en `data/feedback.jsonl`.
+- Aparece el badge **"Rocchio · N juicios"** indicando cuántas
+  valoraciones ha acumulado esta query.
+- La **próxima vez** que se busque la misma query, el vector latente se
+  re-pesa con la fórmula clásica de Rocchio (α=1.0, β=0.75, γ=0.15)
+  hacia el centroide de los docs marcados relevantes y lejos de los no
+  relevantes.
+
+### Panel RAG (panel derecho)
+
+- **Avatar animado** que reacciona al estado (saludo, pensando,
+  respondiendo).
+- **Backend usado** — pill que indica si la respuesta vino de un LLM
+  real (modelo + nombre) o de la plantilla determinista de fallback.
+- **Respuesta enriquecida** — markdown renderizado con marked.js.
+- **Calidad RAG** — chips con tres métricas:
+  - **Fidelidad** (faithfulness): Jaccard token-overlap respuesta ∩ contexto.
+  - **Anclaje** (groundedness): fracción de oraciones de la respuesta
+    con soporte léxico en al menos un documento del contexto.
+  - **Relevancia del contexto**: score promedio de los docs recuperados.
+
+### Página Evaluación
+
+Click en **Evaluación** (barra lateral) ejecuta `/api/eval` contra el
+dataset bundled en `data/evaluation/`. Muestra:
+
+- Métricas agregadas: **P@k, R@k, F1@k, NDCG@k, MAP, MRR, Fallout@k**.
+- **Tabla por consulta** con el desglose individual de cada métrica y
+  el número de documentos relevantes anotados (`|Rel|`).
+
+`Fallout@k` solo se computa cuando se conoce el tamaño del corpus
+(automáticamente derivado de los `original_doc_id` únicos del índice).
+
+### Historial
+
+Click en **Historial** abre las últimas 20 búsquedas (localStorage del
+navegador, no se envía al servidor). Click en una recupera la query.
+
+### Footer global de estadísticas
+
+Barra fija inferior con:
+
+- Total de documentos / chunks indexados.
+- Tamaño del vocabulario TF-IDF.
+- Dimensión latente `k` del SVD.
+- Promedio de tokens por documento.
+- Total acumulado de juicios Rocchio (incluye todas las queries).
+
+Se actualiza al cargar la página y tras cada voto de feedback.
+
+---
+
 ## Próximas Versiones
 
-- **Corte 2:** RAG (Retrieval-Augmented Generation) con respuestas LLM
-- **Corte 3:** Interfaz web Streamlit con visualizaciones
-- Plugins opcionales: expansión de queries, multimodalidad
+Los tres opcionales planificados (§4.2.1 Expansión+Feedback, §4.2.3
+Recomendación, §4.2.4 Evaluación) están cableados en Corte 3. Mejoras
+abiertas:
+
+- Persistencia opcional de web docs en una colección Chroma separada
+  para no perturbar el índice LSI principal.
+- Ampliar el dataset de evaluación a 30+ queries con casos adversariales
+  (ortografía, fuera de corpus).
+- Mapear metadatos de fuente a PDFs para que el boost por perfil del
+  recomendador sea visible también sobre el corpus académico.
 
 ---
 
 **Última actualización:** Mayo 2026
-**Versión:** Cortes 1-2
+**Versión:** Corte 3 (sistema completo)
 **Soporte:** revelianny10@gmail.com

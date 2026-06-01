@@ -1,6 +1,9 @@
 """Tests for RAGService — Groq integration with fallback."""
 
+import importlib.util
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from core.models import (
     Document,
@@ -10,6 +13,17 @@ from core.models import (
     UserProfileType,
 )
 from modules.rag.service import RAGService
+
+
+# Tests that patch the real ``groq`` module need it importable. Use a
+# module-level flag so we can apply skipif markers below without
+# instantiating the import (which would also fail).
+_GROQ_AVAILABLE = importlib.util.find_spec("groq") is not None
+_skip_no_groq = pytest.mark.skipif(
+    not _GROQ_AVAILABLE,
+    reason="'groq' package not installed — Groq-mocked tests require it for "
+    "unittest.mock.patch to resolve the target",
+)
 
 
 def _make_retrieved(doc_id="d1", text="texto médico", score=0.9):
@@ -65,6 +79,7 @@ class TestRAGServiceFallback:
 class TestRAGServiceGroqSuccess:
     """Test happy path with mocked Groq response."""
 
+    @_skip_no_groq
     def test_generate_uses_llm_when_available(self):
         """Mock Groq to return a successful response."""
         with patch("groq.Groq") as mock_groq_class:
@@ -107,6 +122,7 @@ class TestRAGServiceAvailability:
         service = RAGService(api_key=None)
         assert service.is_available() is False
 
+    @_skip_no_groq
     def test_is_available_returns_true_with_api_key_and_client(self):
         with patch("groq.Groq") as mock_groq_class:
             mock_client = MagicMock()

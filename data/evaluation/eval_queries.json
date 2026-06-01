@@ -1,0 +1,42 @@
+[
+  {
+    "query_id": "q01",
+    "text": "¿Qué es la insulina y cómo regula los niveles de glucosa en sangre?"
+  },
+  {
+    "query_id": "q02",
+    "text": "metabolismo de la glucosa y glucólisis"
+  },
+  {
+    "query_id": "q03",
+    "text": "potencial de acción de las neuronas"
+  },
+  {
+    "query_id": "q04",
+    "text": "función de la hemoglobina en el transporte de oxígeno"
+  },
+  {
+    "query_id": "q05",
+    "text": "mutaciones genéticas y cromosómicas"
+  },
+  {
+    "query_id": "q06",
+    "text": "ciclo de Krebs y respiración celular"
+  },
+  {
+    "query_id": "q07",
+    "text": "proceso de fotosíntesis en las plantas"
+  },
+  {
+    "query_id": "q08",
+    "text": "anticuerpos y respuesta inmunitaria"
+  },
+  {
+    "query_id": "q09",
+    "text": "presión arterial e hipertensión"
+  },
+  {
+    "query_id": "q10",
+    "text": "síntesis de proteínas y ribosomas"
+  }
+]

@@ -24,6 +24,7 @@ import argparse
 import json
 import sys
 import textwrap
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -36,23 +37,66 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from core.models import Document, Query, UserProfile, UserProfileType
+from core.models import Document, PipelineContext, Query, UserProfile, UserProfileType
 from core.pipeline import RetrievalContext
+from core.plugin_pipeline import PluginPipeline
 from infra.chroma_repository import ChromaRepository
 from modules.document_loader.service import DocumentLoader, DocumentLoaderError
 from modules.indexer.document_store import FileSystemDocumentStore
 from modules.indexer.service import IndexerService
+from modules.indexer.chunker import TextChunker
+from modules.ranker.service import HybridRanker
 from modules.retriever.fallback_retriever import FallbackRetriever
 from modules.retriever.service import LSIRetriever
 from modules.web_search import InternetSearchRetriever, WebContentFetcher
 from modules.text_processor.service import TextProcessor
+from modules.rag.evaluator import RAGEvaluator
 from modules.rag.service import RAGService
-from tests._synthetic_corpus import RAW_DOCUMENTS
-
+from modules.recommender import ContentBasedRecommender
+from plugins.expansion.service import QueryExpansionPlugin
+from plugins.feedback import JSONLFeedbackStore, RelevanceFeedbackService
 _CHROMA_DIR = "data/chroma"
 _STORE_DIR = "data/documents"
 _MODELS_DIR = "models/lsi"
 _RAW_DIR = Path("data/raw")
+_FEEDBACK_PATH = "data/feedback.jsonl"
+
+
+@dataclass(slots=True)
+class PipelineResult:
+    """Aggregated output of a single retrieval cycle.
+
+    Bundles the retrieved documents, RAG response, and the side-channel
+    information (query expansion, RAG quality scores) that the UI needs
+    to surface without re-running the pipeline.
+    """
+
+    results: list
+    rag_response: object | None
+    expansion_terms: list[str] = field(default_factory=list)
+    rag_quality: dict[str, float] | None = None
+
+
+def extract_snippet(text: str, query: str, length: int = 200) -> str:
+    """Return a query-aware excerpt from text."""
+    clean = text.replace("\n", " ")
+    terms = [t.lower() for t in query.split() if len(t) > 2]
+    if not terms or len(clean) <= length:
+        snippet = clean[:length]
+        return snippet + "…" if len(clean) > length else snippet
+
+    lower = clean.lower()
+    best_pos, best_score = 0, -1
+    for i in range(0, len(clean) - length + 1, 30):
+        score = sum(lower[i : i + length].count(t) for t in terms)
+        if score > best_score:
+            best_score, best_pos = score, i
+
+    start = best_pos
+    end = min(start + length, len(clean))
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(clean) else ""
+    return prefix + clean[start:end].strip() + suffix
 
 _PROFILE_MAP: dict[str, UserProfileType] = {
     "paciente": UserProfileType.PATIENT,
@@ -99,34 +143,24 @@ def _load_from_raw_dir() -> list[Document] | None:
         except (json.JSONDecodeError, KeyError):
             continue
 
-    # PDF, TXT, JSON, CSV, Markdown — via DocumentLoader
-    supported_extensions = {".pdf", ".txt", ".json", ".csv", ".md"}
-    non_jsonl_files = [
+    # JSON, TXT, CSV, Markdown — via DocumentLoader, loaded file by file.
+    # PDFs are intentionally excluded: they are pre-extracted to JSON by
+    # scripts/ingest_pdfs.py, so the app loads the cheap JSON and never
+    # re-parses a PDF here (even if a .pdf is left in data/raw/).
+    supported_extensions = {".txt", ".json", ".csv", ".md"}
+    other_files = [
         f for f in _RAW_DIR.rglob("*")
-        if f.is_file() and f.suffix in supported_extensions
+        if f.is_file() and f.suffix.lower() in supported_extensions
     ]
-    if non_jsonl_files:
+    if other_files:
         loader = DocumentLoader()
-        try:
-            loaded = loader.load_from_directory(_RAW_DIR)
-            documents.extend(loaded)
-        except DocumentLoaderError as e:
-            print(f"  [warn] DocumentLoader: {e}", file=sys.stderr)
+        for file_path in other_files:
+            try:
+                documents.extend(loader.load_from_file(file_path))
+            except DocumentLoaderError as e:
+                print(f"  [warn] DocumentLoader ({file_path.name}): {e}", file=sys.stderr)
 
     return documents if documents else None
-
-
-def _load_synthetic_documents() -> list[Document]:
-    """Return the 20 built-in synthetic medical documents."""
-    return [
-        Document(
-            doc_id=d["doc_id"],
-            text=d["text"],
-            url=d["url"],
-            metadata={"title": d["title"]},
-        )
-        for d in RAW_DOCUMENTS
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -144,40 +178,122 @@ class Pipeline:
             collection_name="medical_documents",
         )
         self.document_store = FileSystemDocumentStore(storage_dir=_STORE_DIR)
-        _lsi = LSIRetriever(
+        # Rocchio relevance feedback: persistent JSONL store + service. The
+        # retriever consults the service on every query and re-weights the
+        # latent vector when judgments exist for the same query text.
+        self.feedback_service = RelevanceFeedbackService(
+            store=JSONLFeedbackStore(_FEEDBACK_PATH),
+        )
+        self.lsi = LSIRetriever(
             repository=self.repository,
             document_store=self.document_store,
             model_dir=_MODELS_DIR,
+            feedback_service=self.feedback_service,
         )
         _internet = InternetSearchRetriever(
             fetcher=WebContentFetcher(),
             document_store=self.document_store,
         )
         self.retriever = FallbackRetriever(
-            primary=_lsi,
+            primary=self.lsi,
             fallback=_internet,
             min_results=3,
+            min_score=0.35,  # trigger web fallback when LSI top result scores below 35%
         )
         self.context = RetrievalContext(strategy=self.retriever)
+        # The hybrid re-ranker (BM25 + LSI) is a first-class pipeline stage: it
+        # runs between the post_retrieval and post_ranking hooks (see retrieve()),
+        # exactly as the microkernel flow documents. RAGService therefore receives
+        # already-ranked documents and does not re-rank them itself.
+        self.ranker = HybridRanker()
         self.rag_service = RAGService()
+        self.rag_evaluator = RAGEvaluator()
+        # Content-based recommender (§4.2.3 — optional). Lives on its own
+        # endpoint and feeds a separate UI panel, so it stays orthogonal
+        # to the LSI ranking, Rocchio, and the evaluation dataset.
+        self.recommender = ContentBasedRecommender(
+            repository=self.repository,
+            document_store=self.document_store,
+        )
+        # Microkernel: plugins are registered in build() once the vocabulary
+        # the expansion plugin needs is available. Empty here = no-op pipeline.
+        self.plugins = PluginPipeline()
         self.corpus = None
         self._source_label = ""
 
+    def _model_exists(self) -> bool:
+        """Return True if persisted LSI artifacts are present on disk."""
+        path = Path(_MODELS_DIR)
+        return (path / "tfidf.joblib").exists() and (path / "svd.joblib").exists()
+
     def build(self) -> None:
-        """Load documents, build index, and fit the LSI model."""
+        """Load documents, build index, and fit the LSI model.
+
+        On subsequent startups, loads persisted model artifacts from disk
+        instead of re-parsing the full corpus (warm start).
+        """
         print("  loading NLP model (spaCy)...", end=" ", flush=True)
         self.text_processor = TextProcessor()
-        self.indexer = IndexerService(text_processor=self.text_processor)
+        chunker = TextChunker(
+            chunk_size=300,
+            overlap=50,
+            strategy="fixed",
+        )
+        self.indexer = IndexerService(text_processor=self.text_processor, chunker=chunker)
         print("done")
 
+        if self._model_exists():
+            try:
+                self._warm_start()
+                return
+            except Exception as exc:
+                # A saved model that fails to load (corrupt/incompatible artifacts,
+                # renamed files, etc.) must not crash startup — fall back to a clean
+                # cold start that rebuilds everything from the corpus.
+                print(f"failed ({exc}); falling back to cold start", file=sys.stderr)
+
+        self._cold_start()
+
+    def _warm_start(self) -> None:
+        """Load pre-built LSI model from disk — skips corpus parsing and SVD."""
+        print("  found saved model — loading from disk (warm start)...", end=" ", flush=True)
+        self.lsi = LSIRetriever.load(
+            repository=self.repository,
+            document_store=self.document_store,
+            model_dir=_MODELS_DIR,
+            feedback_service=self.feedback_service,
+        )
+        self.retriever.primary = self.lsi
+
+        # Restore spell checker vocabulary so query correction works. The fitted
+        # vocabulary is already persisted inside tfidf.joblib and restored by
+        # LSIRetriever.load(), so we read it straight from the loaded processor —
+        # no separate vocab artifact needed.
+        for term in self.lsi.tfidf.vocabulary:
+            self.text_processor.spell_checker._insert(term)
+
+        n_docs = self.repository.collection.count()
+        print(f"done  [{n_docs} docs in vector DB]")
+
+        # Dynamic indexing: fold in any documents added to data/raw/ since the
+        # last full fit, without re-fitting the SVD (Conf_2 "Incremental" path).
+        self._fold_in_new_documents()
+
+        # Plugins depend on the fitted vocabulary, now available after load().
+        self._register_plugins()
+
+    def _cold_start(self) -> None:
+        """Parse corpus, fit LSI, persist artifacts for future warm starts."""
         print("  reading documents from data/raw/...", end=" ", flush=True)
-        real_docs = _load_from_raw_dir()
-        if real_docs:
-            documents = real_docs
-            self._source_label = f"data/raw/ ({len(documents)} docs)"
-        else:
-            documents = _load_synthetic_documents()
-            self._source_label = f"synthetic corpus ({len(documents)} docs)"
+        documents = _load_from_raw_dir()
+        if not documents:
+            raise RuntimeError(
+                "No documents found in data/raw/. The pipeline cannot start "
+                "without a corpus. Drop JSON/JSONL files exported by the "
+                "crawler (or by scripts/ingest_pdfs.py) into data/raw/ and "
+                "try again."
+            )
+        self._source_label = f"data/raw/ ({len(documents)} docs)"
         print("done")
 
         print(f"  source  : {self._source_label}")
@@ -193,27 +309,153 @@ class Pipeline:
         self.retriever.fit(self.corpus)
         print(f"done  [{n_docs} docs, {n_terms} terms]")
 
+        print("  saving model to disk...", end=" ", flush=True)
+        Path(_MODELS_DIR).mkdir(parents=True, exist_ok=True)
+        self.lsi.save(_MODELS_DIR)
+        print("done  (future startups will be fast)")
+
+        # Register optional plugins now that the fitted vocabulary is available.
+        self._register_plugins()
+
+    def _register_plugins(self) -> None:
+        """Register optional pipeline plugins once the fitted vocabulary exists.
+
+        Called from both cold and warm start so query expansion is always active,
+        not just on the first ever run. The expansion plugin needs the fitted
+        vocabulary to filter expanded terms to ones the TF-IDF model knows.
+
+        Idempotent: the plugin pipeline is rebuilt from scratch on every call, so
+        a warm start that also rebalances (which cold-starts internally) does not
+        end up registering the same plugin twice.
+        """
+        self.plugins = PluginPipeline()
+        self.plugins.register(
+            QueryExpansionPlugin(target_vocabulary=self.lsi.tfidf.vocabulary)
+        )
+
+    def _fold_in_new_documents(self) -> None:
+        """Incrementally index documents added to data/raw/ since the last fit.
+
+        Detects raw documents whose source id is not yet represented in the
+        document store, folds them into the existing latent space via
+        :meth:`LSIRetriever.add_documents` (no SVD re-fit), and triggers a full
+        rebuild when too many documents have been folded in (the "balanceo" step).
+        A no-op when data/raw/ has no new documents.
+        """
+        raw_docs = _load_from_raw_dir()
+        if not raw_docs:
+            return
+
+        # Stored ids are chunk ids ("<original>__chunk_<i>"); map back to the
+        # original document id to compare against the raw corpus.
+        indexed_originals = {
+            stored_id.split("__chunk_")[0]
+            for stored_id in self.document_store.list_all_ids()
+        }
+        new_docs = [d for d in raw_docs if d.doc_id not in indexed_originals]
+        if not new_docs:
+            return
+
+        print(f"  folding in {len(new_docs)} new document(s)...", end=" ", flush=True)
+        new_corpus = self.indexer.build(new_docs)
+        added = self.lsi.add_documents(new_corpus)
+        print(f"done  [+{added} chunks]")
+
+        if self.lsi.needs_rebalance():
+            print(
+                f"  incremental fraction {self.lsi.incremental_fraction:.0%} exceeds "
+                "threshold — rebalancing (full refit)..."
+            )
+            self._cold_start()
+
     def retrieve(
-        self, query_text: str, top_k: int = 5, user_profile: UserProfile | None = None
-    ) -> tuple[list, object | None]:
-        """Run the full query pipeline and return retrieved documents and RAG response.
+        self,
+        query_text: str,
+        top_k: int = 5,
+        user_profile: UserProfile | None = None,
+        force_web: bool = False,
+        apply_correction: bool = True,
+    ) -> PipelineResult:
+        """Run the full query pipeline and return all stage outputs.
+
+        Args:
+            query_text: Raw query string from the user.
+            top_k: Number of results to return.
+            user_profile: Optional profile that tailors the RAG response.
+            force_web: When True, force the web-search fallback to fire.
+            apply_correction: When True (default), spell-correct the query
+                against the indexed vocabulary before retrieval. When False,
+                search exactly what the user typed (no spell correction).
 
         Returns:
-            Tuple of (retrieved_documents, rag_response).
-            rag_response is None if the RAG service fails.
+            :class:`PipelineResult` bundling the retrieved documents, the
+            RAG response (``None`` on failure), the terms added by the
+            expansion plugin, and the RAG quality scores.
         """
-        query_corpus = self.indexer.build_query(query_text)
+        query_corpus = self.indexer.build_query(
+            query_text, apply_correction=apply_correction
+        )
         query = Query(text=query_text, indexed_corpus=query_corpus, user_profile=user_profile)
-        results = self.context.execute_search(query, top_k=top_k)
+
+        # Microkernel flow (each hook is a no-op when no plugin is registered):
+        #   pre_retrieval → retriever → post_retrieval → ranker → post_ranking → RAG
+        context = PipelineContext(query=query)
+
+        # pre_retrieval: plugins (e.g. query expansion) may rewrite the query's
+        # indexed_corpus before the retriever runs.
+        context = self.plugins.run_hook("pre_retrieval", context)
+        query = context.query
+
+        # Honour the UI toggle: temporarily lower min_results so the fallback
+        # fires regardless of how many local results the LSI returned. The
+        # try/finally is load-bearing — without it, an exception during
+        # execute_search would leak the elevated threshold to every later
+        # request, forcing the web fallback even when the user toggled it off.
+        original_min = self.retriever.min_results
+        if force_web:
+            self.retriever.min_results = top_k + 1
+        try:
+            context.results = self.context.execute_search(query, top_k=top_k)
+        finally:
+            if force_web:
+                self.retriever.min_results = original_min
+
+        # post_retrieval: plugins act on the raw retrieved set before ranking.
+        context = self.plugins.run_hook("post_retrieval", context)
+
+        # Ranking is a first-class stage: re-rank (BM25 + LSI) before generation.
+        if context.results:
+            context.results = self.ranker.rerank(query, context.results)
+
+        # post_ranking: plugins act on the final ordering before answer generation.
+        context = self.plugins.run_hook("post_ranking", context)
+        results = context.results
 
         rag_response = None
+        rag_quality: dict[str, float] | None = None
         if results:
             try:
                 rag_response = self.rag_service.generate(query, results)
             except Exception as exc:
                 print(f"  [warn] RAG generation failed: {exc}", file=sys.stderr)
 
-        return results, rag_response
+            if rag_response is not None and getattr(rag_response, "answer", ""):
+                try:
+                    rag_quality = self.rag_evaluator.evaluate(
+                        query, rag_response.answer, results,
+                    )
+                except Exception as exc:
+                    print(f"  [warn] RAG evaluation failed: {exc}", file=sys.stderr)
+
+        expansion = context.metadata.get("expansion", {})
+        expansion_terms = list(expansion.get("added", []))
+
+        return PipelineResult(
+            results=results,
+            rag_response=rag_response,
+            expansion_terms=expansion_terms,
+            rag_quality=rag_quality,
+        )
 
     def stats(self) -> dict:
         """Return corpus statistics."""
@@ -235,7 +477,7 @@ def _print_results(results: list, query_text: str) -> None:
     for i, r in enumerate(results, start=1):
         title = r.document.metadata.get("title", r.document.doc_id)
         url = r.document.url or "(no url)"
-        snippet = r.document.text[:120].replace("\n", " ") + "..."
+        snippet = extract_snippet(r.document.text, query_text, length=200)
         print(f"\n  {i}. [{r.score:.3f}] {title}")
         print(f"       {url}")
         print(f"       {snippet}")
@@ -271,6 +513,12 @@ def _print_rag_response(response: object) -> None:
             print(wrapped)
         else:
             print()
+
+
+def _print_rag_quality(metrics: dict[str, float]) -> None:
+    """Display the lightweight RAGAS-style quality metrics (Conf_9)."""
+    parts = [f"{name}={value:.2f}" for name, value in metrics.items()]
+    print(f"\n  ──── Calidad RAG ────  {'  '.join(parts)}")
 
 
 def _print_help() -> None:
@@ -315,10 +563,14 @@ def run_interactive(pipeline: Pipeline, user_profile: UserProfile | None = None)
                 _print_help()
                 continue
 
-            results, rag_response = pipeline.retrieve(raw, user_profile=user_profile)
-            _print_results(results, raw)
-            if rag_response:
-                _print_rag_response(rag_response)
+            outcome = pipeline.retrieve(raw, user_profile=user_profile)
+            _print_results(outcome.results, raw)
+            if outcome.expansion_terms:
+                print(f"\n  (también buscamos: {', '.join(outcome.expansion_terms)})")
+            if outcome.rag_response:
+                _print_rag_response(outcome.rag_response)
+            if outcome.rag_quality:
+                _print_rag_quality(outcome.rag_quality)
             print()
 
     except Exception as exc:
@@ -327,10 +579,14 @@ def run_interactive(pipeline: Pipeline, user_profile: UserProfile | None = None)
 
 
 def run_oneshot(pipeline: Pipeline, query: str, user_profile: UserProfile | None = None) -> None:
-    results, rag_response = pipeline.retrieve(query, user_profile=user_profile)
-    _print_results(results, query)
-    if rag_response:
-        _print_rag_response(rag_response)
+    outcome = pipeline.retrieve(query, user_profile=user_profile)
+    _print_results(outcome.results, query)
+    if outcome.expansion_terms:
+        print(f"\n  (también buscamos: {', '.join(outcome.expansion_terms)})")
+    if outcome.rag_response:
+        _print_rag_response(outcome.rag_response)
+    if outcome.rag_quality:
+        _print_rag_quality(outcome.rag_quality)
     print()
 
 
@@ -341,6 +597,20 @@ def main() -> None:
     )
     parser.add_argument("--query", "-q", help="Run a single query and exit")
     parser.add_argument("--stats", action="store_true", help="Print corpus stats and exit")
+    parser.add_argument(
+        "--eval", action="store_true",
+        help="Evaluate the LSI retriever against the bundled test collection "
+             "(P@k, R@k, F1, NDCG, MAP, MRR) and exit",
+    )
+    parser.add_argument(
+        "--eval-k", type=int, default=10, metavar="K",
+        help="Cut-off rank for the @k evaluation metrics (default: 10)",
+    )
+    parser.add_argument(
+        "--rerank", action="store_true",
+        help="With --eval, apply the HybridRanker (BM25+LSI) before scoring "
+             "to compare against pure LSI",
+    )
     parser.add_argument(
         "--top-k", type=int, default=5, metavar="K",
         help="Number of results to return (default: 5)",
@@ -371,12 +641,40 @@ def main() -> None:
         name="Paciente",
     )
 
-    if args.stats:
+    if args.eval:
+        _run_evaluation(pipeline, k=args.eval_k, rerank=args.rerank)
+    elif args.stats:
         _print_stats(pipeline.stats())
     elif args.query:
         run_oneshot(pipeline, args.query, user_profile=user_profile)
     else:
         run_interactive(pipeline, user_profile=user_profile)
+
+
+def _run_evaluation(pipeline: Pipeline, k: int, rerank: bool) -> None:
+    """Evaluate the pure LSI retriever against the bundled test collection.
+
+    Reuses the evaluation module's machinery so the CLI metrics match
+    ``python -m modules.evaluation.service``. The pipeline's own HybridRanker is
+    passed through when ``rerank`` is set, so the comparison reflects the live
+    ranking stage rather than a freshly constructed one.
+    """
+    from modules.evaluation.dataset import load_dataset
+    from modules.evaluation.service import EvaluationService, _build_lsi_search_fn
+
+    print("[eval] loading bundled test collection...")
+    dataset = load_dataset(
+        "data/evaluation/eval_queries.json",
+        "data/evaluation/eval_qrels.json",
+    )
+    ranker = pipeline.ranker if rerank else None
+    if rerank:
+        print("[eval] re-ranking enabled (HybridRanker BM25+LSI)")
+
+    print(f"[eval] running evaluation (k={k})...\n")
+    service = EvaluationService(_build_lsi_search_fn(pipeline, ranker=ranker), k=k)
+    report = service.evaluate(dataset)
+    print(report.format_table())
 
 
 if __name__ == "__main__":

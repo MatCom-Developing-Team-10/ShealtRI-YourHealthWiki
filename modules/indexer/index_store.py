@@ -40,7 +40,7 @@ from pathlib import Path
 import joblib
 
 from core.interfaces import IndexedCorpus
-from modules.text_processor import TrieSpellChecker
+from modules.text_processor.spell_checker import TrieSpellChecker
 
 
 logger = logging.getLogger(__name__)

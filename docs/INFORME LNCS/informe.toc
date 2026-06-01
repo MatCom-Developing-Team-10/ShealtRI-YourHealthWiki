@@ -1,0 +1,24 @@
+\babel@toc {spanish}{}\relax 
+\contentsline {title}{ShealtRI--YourHealthWiki}{1}{}%
+\authcount {3}
+\contentsline {author}{Lianny de la C. Reveé Valdivieso\unskip {} \and Kevin A. Torres Perera\unskip {} \and Jocdan L. López Mantecón\unskip {}}{1}{}%
+\contentsline {section}{\numberline {1}Introducción}{3}{}%
+\contentsline {section}{\numberline {2}Marco Teórico}{3}{}%
+\contentsline {subsection}{\numberline {2.1}El modelo formal de un SRI}{3}{}%
+\contentsline {subsection}{\numberline {2.2}Modelo de espacio vectorial y ponderación TF--IDF}{3}{}%
+\contentsline {subsection}{\numberline {2.3}Indexado Semántico Latente (LSI): el modelo no básico}{4}{}%
+\contentsline {subsection}{\numberline {2.4}Re-ordenamiento híbrido, BM25 y RAG}{4}{}%
+\contentsline {subsection}{\numberline {2.5}Evaluación}{5}{}%
+\contentsline {section}{\numberline {3}Desarrollo e Implementación}{5}{}%
+\contentsline {subsection}{\numberline {3.1}Arquitectura general}{5}{}%
+\contentsline {subsection}{\numberline {3.2}Adquisición de datos: Crawler}{5}{}%
+\contentsline {subsection}{\numberline {3.3}El corpus y su representatividad}{6}{}%
+\contentsline {subsection}{\numberline {3.4}Indexación: índice invertido y normalización}{7}{}%
+\contentsline {subsection}{\numberline {3.5}Modelo LSI, embeddings y base de datos vectorial}{7}{}%
+\contentsline {subsection}{\numberline {3.6}Flujo \emph {end-to-end} de una consulta}{8}{}%
+\contentsline {subsection}{\numberline {3.7}Detección de información insuficiente y búsqueda web}{9}{}%
+\contentsline {subsection}{\numberline {3.8}Re-ranking, factores de ordenamiento y posicionamiento visual}{9}{}%
+\contentsline {subsection}{\numberline {3.9}Generación aumentada por recuperación (RAG)}{9}{}%
+\contentsline {subsection}{\numberline {3.10}Plugins opcionales: expansión, retroalimentación y recomendación}{10}{}%
+\contentsline {section}{\numberline {4}Evaluación y Resultados}{11}{}%
+\contentsline {section}{\numberline {5}Deficiencias, Conclusiones y Trabajo Futuro}{11}{}%

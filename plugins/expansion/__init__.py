@@ -1,10 +1,10 @@
 """Query expansion plugin for the SRI pipeline.
 
 Public API:
-    :class:`QueryExpander`         — pure expansion logic (thesaurus + PRF).
+    :class:`QueryExpander`         — pure expansion logic (medical thesaurus).
     :class:`QueryExpansionPlugin`  — wraps QueryExpander into a Plugin
                                      registered at the ``pre_retrieval`` hook.
-    :class:`ExpansionConfig`       — knobs for both strategies.
+    :class:`ExpansionConfig`       — knobs for the expansion strategy.
     :data:`MEDICAL_THESAURUS`      — Spanish medical term/synonym map.
 """
 

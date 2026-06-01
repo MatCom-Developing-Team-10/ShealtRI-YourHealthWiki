@@ -1,43 +1,38 @@
-# Multi-stage build for optimized image size
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
-# build-essential: for compiling Python packages
-# git: for version control inside container
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    git \
+# build-essential is required to compile chromadb's hnswlib wheel on slim.
+# It is removed after pip install to keep the runtime image small.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first (leverage Docker layer caching)
-# Each file is a separate layer — only rebuilds when that file changes
+# Install Python deps first to maximise Docker layer caching.
 COPY requirements.txt requirements-ui.txt ./
+RUN pip install --no-cache-dir -r requirements-ui.txt
 
-# Install runtime + UI deps — extended timeout for slow connections
-RUN pip install --no-cache-dir --timeout=120 --retries=5 -r requirements-ui.txt
+# Pre-fetch heavy NLP assets at build time so the container never hits
+# the network at startup or on the first query.
+RUN python -m spacy download es_core_news_md \
+    && python -c "import nltk; nltk.download('stopwords', quiet=True); nltk.download('punkt', quiet=True)"
 
-# Download spaCy Spanish model after dependencies are installed
-RUN python -m spacy download es_core_news_md
+# Drop the compiler toolchain — no longer needed at runtime.
+RUN apt-get purge -y --auto-remove build-essential \
+    && rm -rf /var/lib/apt/lists/* /root/.cache/pip
 
-# Copy entire project
+# Copy the application code (data/, models/, logs/ are excluded via .dockerignore
+# and arrive through compose volumes at runtime).
 COPY . .
 
-# Create necessary directories for persistent data
+# Persistent paths are bind-mounted by docker-compose; create them so the app
+# does not crash if it ever runs without compose.
 RUN mkdir -p /app/data /app/models /app/logs
 
-# Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     SRI_ENV=production
 
-# Expose Streamlit port (8501 default)
 EXPOSE 8501
 
-# Health check (optional but recommended)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8501/api/profiles')" || exit 1
-
-# FastAPI + Uvicorn server (Corte 3)
 CMD ["uvicorn", "ui.app:app", "--host", "0.0.0.0", "--port", "8501"]

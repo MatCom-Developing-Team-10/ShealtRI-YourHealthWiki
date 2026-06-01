@@ -1,20 +1,20 @@
-"""Regression tests for documented bugs that are NOT yet fixed.
+"""Regression tests for bugs documented in ``docs/informe-tecnico-tests-corte1.md``.
 
-Each test is marked ``@pytest.mark.xfail(strict=True)`` with the bug ID
-from the technical report. When the bug is fixed:
+Originally each of these tests carried an ``@pytest.mark.xfail(strict=True)``
+marker so that fixing the bug would force the marker to be retired in the
+same commit. Both bugs have since been fixed, so the tests have been
+promoted to standard regression tests — they MUST pass.
 
-    - The test will start passing.
-    - ``strict=True`` turns the unexpected pass into a test failure.
-    - The committer is then forced to either:
-        a) remove the xfail marker (preferred — the bug is fixed); or
-        b) explain why the bug came back.
-
-This way the test suite tracks the bug backlog automatically.
+If any of these tests fails again, the corresponding fix has regressed.
 """
 
 from __future__ import annotations
 
-import pytest
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
 from scipy.sparse import csr_matrix
 
@@ -22,62 +22,82 @@ from modules.retriever.lsi_model import LSIModel
 
 
 # ---------------------------------------------------------------------------
-# Bug #3 from informe-tecnico — LSIModel.fit() crashes with n_docs == 1
+# Bug #3 (fixed) — LSIModel.fit() must handle a single-document corpus.
+#
+# Before the fix: ``effective_k = min(n_components, n_terms-1, n_docs-1)``
+# became 0 for ``n_docs == 1`` and TruncatedSVD rejected the parameter.
+# The fix pads the matrix with a zero row so SVD has two samples to work
+# with, then discards the padding row from the returned vectors. The
+# fitted ``_svd`` instance is still usable for ``project_query``.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Bug #3 in docs/informe-tecnico-tests-corte1.md: "
-        "LSIModel.fit() computes effective_k = min(n_components, n_terms-1, n_docs-1). "
-        "With n_docs == 1 this becomes 0 and TruncatedSVD rejects the value. "
-        "Expected fix: effective_k = max(1, min(...)). When that lands, this test "
-        "starts passing — REMOVE the xfail marker in the same commit."
-    ),
-)
 def test_lsi_model_handles_single_document_corpus():
-    """When fixed, fitting on a single-doc corpus should produce a 1-dim embedding."""
+    """A 1×N TF-IDF matrix should yield a single ≥1-dim latent vector."""
     rng = np.random.default_rng(0)
     matrix = csr_matrix(rng.random((1, 5), dtype=np.float32))
+
     model = LSIModel(n_components=3)
-    vectors = model.fit(matrix)  # currently raises InvalidParameterError
+    vectors = model.fit(matrix)
+
     assert len(vectors) == 1
-    # After fix, n_components is clamped to >= 1
     assert len(vectors[0]) >= 1
+    # The fitted model must remain usable for query projection.
+    assert model.is_fitted is True
+
+
+def test_lsi_model_empty_corpus_raises():
+    """A 0×N matrix is still an error — the fix only relaxes the n_docs==1 case."""
+    import pytest
+
+    empty = csr_matrix((0, 5), dtype=np.float32)
+    model = LSIModel(n_components=3)
+    with pytest.raises(ValueError, match="at least one document"):
+        model.fit(empty)
+
+
+def test_lsi_model_single_doc_query_projection_works():
+    """After fitting on 1 doc, project_query must return a vector of the same dim."""
+    rng = np.random.default_rng(1)
+    doc_matrix = csr_matrix(rng.random((1, 5), dtype=np.float32))
+    query_matrix = csr_matrix(rng.random((1, 5), dtype=np.float32))
+
+    model = LSIModel(n_components=3)
+    doc_vectors = model.fit(doc_matrix)
+    query_vector = model.project_query(query_matrix)
+
+    assert len(query_vector) == len(doc_vectors[0])
 
 
 # ---------------------------------------------------------------------------
-# Bug #4 — modules.indexer import chain pulls in spaCy
+# Bug #4 (fixed) — modules.indexer must not transitively import spaCy.
+#
+# Before the fix:
+#   modules.indexer.__init__ re-exported IndexStore, which imported
+#   TrieSpellChecker via ``from modules.text_processor import TrieSpellChecker``,
+#   which loaded ``modules/text_processor/__init__.py``, which imported
+#   ``service.py``, which imported spaCy.
+#
+# The fix has two parts:
+#   1. ``index_store.py`` now imports TrieSpellChecker from the submodule
+#      directly: ``from modules.text_processor.spell_checker import …``
+#   2. ``modules/indexer/__init__.py`` exposes ``IndexerService`` and
+#      ``IndexStore`` via PEP-562 ``__getattr__`` so they load lazily only
+#      when explicitly requested by name.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Bug #4 in docs/informe-tecnico-tests-corte1.md: "
-        "Importing modules.indexer transitively loads modules.text_processor.__init__, "
-        "which imports spaCy. FileSystemDocumentStore should be importable without spaCy. "
-        "Expected fix: modules/indexer/index_store.py imports TrieSpellChecker directly "
-        "from modules.text_processor.spell_checker (bypassing the package __init__)."
-    ),
-)
 def test_indexer_subpackage_does_not_pull_spacy(tmp_path):
-    """When fixed, importing modules.indexer must not import spaCy.
+    """Importing modules.indexer must not import spaCy.
 
-    Run inside a subprocess so we do NOT pollute the parent process's
-    ``sys.modules`` (which would corrupt the session-scoped TextProcessor
-    fixture used by other tests).
+    Runs inside a subprocess with a meta-path blocker that raises
+    ImportError on any ``import spacy``/``import spacy.*`` attempt, so a
+    side-effect import would surface as a non-zero exit code.
     """
-    import subprocess
-    import sys
-    from pathlib import Path
-
     project_root = Path(__file__).resolve().parents[2]
     script = tmp_path / "probe.py"
     script.write_text(
         "import sys\n"
-        # Block spaCy at the importer level before anything project-related loads
         "class _Blocker:\n"
         "    def find_spec(self, name, path=None, target=None):\n"
         "        if name == 'spacy' or name.startswith('spacy.'):\n"
@@ -89,13 +109,45 @@ def test_indexer_subpackage_does_not_pull_spacy(tmp_path):
         encoding="utf-8",
     )
 
+    # ``cwd`` alone does not put the project root on ``sys.path`` for a
+    # subprocess invoked with a script path; PYTHONPATH does.
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(project_root) + os.pathsep + env.get("PYTHONPATH", "")
+
     result = subprocess.run(
         [sys.executable, str(script)],
         cwd=str(project_root),
         capture_output=True,
         text=True,
+        env=env,
     )
     assert result.returncode == 0, (
-        f"Importing modules.indexer pulled spaCy.\n"
-        f"stderr:\n{result.stderr}"
+        f"Importing modules.indexer pulled spaCy.\nstderr:\n{result.stderr}"
     )
+
+
+def test_indexer_lazy_attrs_still_resolvable():
+    """The lazy ``__getattr__`` plumbing must keep the public API working."""
+    import modules.indexer as pkg
+
+    # Eager attribute — present from import.
+    assert pkg.FileSystemDocumentStore is not None
+    # Lazy attributes — resolved on demand.
+    assert pkg.IndexerService is not None
+    assert pkg.IndexStore is not None
+    assert pkg.IndexerConfig is not None
+
+    # And listed via ``dir`` so introspection tools find them.
+    listed = dir(pkg)
+    for name in ("IndexerService", "IndexStore", "IndexerConfig", "FileSystemDocumentStore"):
+        assert name in listed, f"{name!r} missing from dir(modules.indexer)"
+
+
+def test_indexer_lazy_unknown_attr_raises_attribute_error():
+    """``__getattr__`` must still raise AttributeError for unknown names."""
+    import pytest
+
+    import modules.indexer as pkg
+
+    with pytest.raises(AttributeError):
+        pkg.does_not_exist  # noqa: B018

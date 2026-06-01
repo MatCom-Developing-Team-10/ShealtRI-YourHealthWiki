@@ -10,7 +10,7 @@ Locks down:
 
 from __future__ import annotations
 
-from modules.text_processor.stopwords import ADDITIONAL_SPANISH_STOPWORDS
+from core.stopwords import ADDITIONAL_SPANISH_STOPWORDS
 from plugins.expansion.thesaurus import MEDICAL_THESAURUS, expand_term
 
 

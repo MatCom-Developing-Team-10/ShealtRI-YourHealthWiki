@@ -41,28 +41,44 @@ class TfidfProcessor:
         self._n_docs = len(corpus.documents)
         self._vocabulary = corpus.vocabulary
         self._term_to_idx = {term: idx for idx, term in enumerate(self._vocabulary)}
+        n_terms = len(self._vocabulary)
 
-        # Compute IDF: log((N+1) / (df+1)) + 1
-        self._idf = np.zeros(len(self._vocabulary), dtype=np.float32)
-        for term_idx, term in enumerate(self._vocabulary):
-            df = len(corpus.inverted_index.get(term, []))
-            self._idf[term_idx] = np.log((self._n_docs + 1) / (df + 1)) + 1.0
+        # IDF (smoothed): log((N+1) / (df+1)) + 1, vectorized over the vocabulary.
+        # df is the document frequency = number of postings for the term.
+        df = np.fromiter(
+            (len(corpus.inverted_index.get(term, [])) for term in self._vocabulary),
+            dtype=np.float32,
+            count=n_terms,
+        )
+        self._idf = (np.log((self._n_docs + 1) / (df + 1)) + 1.0).astype(np.float32)
 
-        # Build sparse matrix: TF-IDF = TF * IDF
-        rows, cols, data = [], [], []
+        # Build the sparse TF-IDF matrix. Gather the (doc, term, tf) triples per
+        # term as arrays, then apply the TF-IDF weight (log1p(tf) * idf) in a
+        # single vectorized pass — far cheaper than a Python loop over every
+        # posting. The result is identical to the per-element computation.
+        row_parts: list[np.ndarray] = []
+        col_parts: list[np.ndarray] = []
+        tf_parts: list[np.ndarray] = []
         for term, postings in corpus.inverted_index.items():
-            if term not in self._term_to_idx:
+            term_idx = self._term_to_idx.get(term)
+            if term_idx is None or not postings:
                 continue
-            term_idx = self._term_to_idx[term]
-            term_idf = self._idf[term_idx]
-            for doc_idx, tf in postings:
-                rows.append(doc_idx)
-                cols.append(term_idx)
-                data.append(np.log1p(tf) * term_idf)
+            arr = np.asarray(postings, dtype=np.int64)  # shape (n_postings, 2)
+            row_parts.append(arr[:, 0])
+            col_parts.append(np.full(len(postings), term_idx, dtype=np.int64))
+            tf_parts.append(arr[:, 1])
+
+        if row_parts:
+            rows = np.concatenate(row_parts)
+            cols = np.concatenate(col_parts)
+            tfs = np.concatenate(tf_parts).astype(np.float32)
+            data = np.log1p(tfs) * self._idf[cols]
+        else:
+            rows = cols = data = np.empty(0)
 
         matrix = csr_matrix(
             (data, (rows, cols)),
-            shape=(self._n_docs, len(self._vocabulary)),
+            shape=(self._n_docs, n_terms),
             dtype=np.float32,
         )
         return normalize(matrix, norm="l2", axis=1)
@@ -103,12 +119,75 @@ class TfidfProcessor:
         )
         return normalize(matrix, norm="l2", axis=1)
 
+    def transform_corpus(self, corpus: IndexedCorpus) -> spmatrix:
+        """Transform a multi-document corpus using the fitted vocabulary and IDF.
+
+        Generalizes :meth:`transform` (single query) to N documents. Used for
+        dynamic indexing (folding-in): new documents are weighted with the
+        *existing* IDF and projected onto the *existing* vocabulary, so terms
+        absent from the fitted vocabulary are dropped. The matrix it returns is
+        fed to :meth:`LSIModel.project_documents`.
+
+        Args:
+            corpus: IndexedCorpus of the new documents. Only its
+                ``inverted_index`` (term → [(doc_idx, tf), ...]) and document
+                count are read; the corpus's own vocabulary is ignored in favor
+                of the fitted one.
+
+        Returns:
+            Sparse TF-IDF matrix of shape ``(n_new_docs, n_terms)`` aligned to
+            the fitted vocabulary.
+
+        Raises:
+            RuntimeError: If the processor has not been fitted.
+        """
+        if self._term_to_idx is None or self._idf is None:
+            raise RuntimeError("Must call fit() before transform_corpus()")
+
+        n_docs = len(corpus.documents)
+        n_terms = len(self._vocabulary)
+
+        # Gather (doc, term, tf) triples per term as arrays, then apply the
+        # TF-IDF weight (log1p(tf) * idf) in a single vectorized pass — the same
+        # approach used in fit(), far cheaper than a Python loop over postings.
+        row_parts: list[np.ndarray] = []
+        col_parts: list[np.ndarray] = []
+        tf_parts: list[np.ndarray] = []
+        for term, postings in corpus.inverted_index.items():
+            term_idx = self._term_to_idx.get(term)
+            if term_idx is None or not postings:
+                continue  # out-of-vocabulary term — dropped by folding-in
+            arr = np.asarray(postings, dtype=np.int64)  # shape (n_postings, 2)
+            row_parts.append(arr[:, 0])
+            col_parts.append(np.full(len(postings), term_idx, dtype=np.int64))
+            tf_parts.append(arr[:, 1])
+
+        if row_parts:
+            rows = np.concatenate(row_parts)
+            cols = np.concatenate(col_parts)
+            tfs = np.concatenate(tf_parts).astype(np.float32)
+            data = np.log1p(tfs) * self._idf[cols]
+        else:
+            rows = cols = data = np.empty(0)
+
+        matrix = csr_matrix(
+            (data, (rows, cols)),
+            shape=(n_docs, n_terms),
+            dtype=np.float32,
+        )
+        return normalize(matrix, norm="l2", axis=1)
+
     @property
     def vocabulary(self) -> list[str]:
         """Return fitted vocabulary."""
         if self._vocabulary is None:
             raise RuntimeError("Must call fit() first")
         return self._vocabulary
+
+    @property
+    def n_docs(self) -> int:
+        """Number of documents the processor was fitted on."""
+        return self._n_docs
 
     def save(self, path: str | Path) -> None:
         """Save model to disk."""

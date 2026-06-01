@@ -1,0 +1,595 @@
+\documentclass[runningheads,a4paper,14pts]{llncs}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish,es-noshorthands]{babel} 
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{url}
+
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,shapes.geometric,fit,backgrounds,calc}
+\tikzset{
+	stage/.style={draw, rounded corners=2pt, align=center, font=\scriptsize,
+		fill=blue!6, minimum height=7mm, inner sep=3pt},
+	store/.style={draw, align=center, font=\scriptsize, fill=orange!12,
+		cylinder, shape border rotate=90, aspect=0.25,
+		minimum height=9mm, inner sep=2pt},
+	hook/.style={draw, dashed, rounded corners=2pt, align=center, font=\scriptsize\itshape,
+		fill=green!8, minimum height=6mm, inner sep=2pt},
+	flow/.style={-{Stealth[length=2mm]}, thick},
+}
+
+\newcommand{\keywords}[1]{\par\addvspace\baselineskip
+	\noindent\keywordname\enspace\ignorespaces#1}
+\addto\captionsspanish{\renewcommand{\abstractname}{Abstract}}
+\graphicspath{{figuras/}}
+
+\begin{document}
+	
+	\mainmatter
+	
+	\title{ShealtRI--YourHealthWiki: un Sistema de Recuperación de Información Médica basado en Indexado Semántico Latente y Generación Aumentada por Recuperación}
+	
+	\titlerunning{ShealtRI: Recuperación de Información Médica con LSI y RAG}
+	
+	\author{Lianny de la C. Reveé Valdivieso\inst{1} \and Kevin A. Torres Perera\inst{1} \and Jocdan L. López Mantecón\inst{1}}
+	
+	\authorrunning{L. Reveé, K. Torres, J. López}
+	
+	\institute{Ciencias de la Computación, Grupos 311 y 312, Universidad de La Habana\\
+		\url{https://github.com/MatCom-Developing-Team-10/ShealtRI-YourHealthWiki.git}}
+	
+	\toctitle{ShealtRI--YourHealthWiki}
+	\maketitle
+	
+	\begin{abstract}
+		This paper presents \emph{ShealtRI--YourHealthWiki}, an information retrieval (IR)
+		system for the health and medicine domain that lets users query medical
+		information in natural language and returns relevant documents together with a
+		profile-aware, retrieval-augmented answer. The non-basic retrieval model is
+		Latent Semantic Indexing (LSI): a TF--IDF term--document matrix is reduced with
+		truncated singular value decomposition (SVD) to a latent space of $k=100$
+		dimensions, and the resulting latent vectors are used as embeddings inside a
+		ChromaDB vector store searched by cosine similarity. The architecture is a
+		Pipeline+Microkernel modular monolith: a fixed retrieval pipeline (parsing,
+		spell correction, retrieval, hybrid re-ranking, generation) is extended by
+		optional plugins (thesaurus-based query expansion, Rocchio relevance feedback,
+		a content-based recommender, and an evaluation module) that attach through
+		declarative hooks without contaminating the mandatory code. A sitemap-driven
+		crawler acquires curated content from MedlinePlus, Mayo Clinic and the NHS while
+		honouring \texttt{robots.txt}, per-domain rate limiting and retry policies. When
+		the local corpus is insufficient---detected through result-count, score and
+		recency criteria---an automatic DuckDuckGo web fallback supplements and is cached
+		for reuse. Retrieved documents are re-ranked by a hybrid LSI+BM25 scorer and
+		passed to a Groq-hosted large language model grounded strictly on the retrieved
+		context to mitigate hallucination, with a template fallback when no model is
+		available. We describe the end-to-end data flow, the two-level storage design,
+		the dynamic-indexing (folding-in) mechanism, and an evaluation module reporting
+		Precision, Recall, F1, NDCG, MAP and MRR. We close with the detected limitations
+		and the design we would pursue under idealised conditions.
+		\keywords{recuperación de información, indexado semántico latente, LSI, TF--IDF,
+			RAG, retroalimentación de Rocchio, dominio médico}
+	\end{abstract}
+	
+
+	\setcounter{tocdepth}{4}
+	\tableofcontents
+	\newpage
+	
+	%==================================================================
+	\section{Introducción}
+	%==================================================================
+	
+	Los Sistemas de Recuperación de Información (SRI) constituyen la disciplina que
+	estudia la representación, el almacenamiento, la organización y el acceso a
+	ítems de información para satisfacer una necesidad expresada por un usuario
+	\cite{manning2008,baeza1999}. Su relevancia es hoy mayor que nunca: el volumen
+	de texto disponible crece a un ritmo que vuelve impracticable la búsqueda
+	puramente manual, y la calidad de las decisiones ---especialmente en dominios
+	sensibles como la salud--- depende de poder localizar, en segundos, contenido
+	fiable y pertinente. A diferencia de un sistema de bases de datos, que devuelve
+	coincidencias exactas sobre datos estructurados, un SRI opera sobre lenguaje
+	natural intrínsecamente ambiguo y debe ordenar los resultados por relevancia
+	estimada, no por igualdad.
+	
+	Este informe documenta \emph{ShealtRI--YourHealthWiki}, un SRI para el dominio de
+	\textbf{salud y medicina} desarrollado como proyecto integrador. El sistema
+	permite formular consultas en lenguaje natural sobre síntomas, enfermedades,
+	medicamentos y cuidados, y recupera documentos médicos relevantes empleando
+	\emph{Latent Semantic Indexing} (LSI) como modelo de recuperación no básico,
+	enriqueciendo la respuesta mediante \emph{Retrieval-Augmented Generation} (RAG)
+	adaptada al perfil del usuario. Por un lado, ofrecer una
+	experiencia de búsqueda médica que tolere errores ortográficos y sinonimia ---
+	frecuentes cuando un paciente describe su problema con vocabulario no técnico---;
+	por otro, garantizar que la respuesta generada esté \emph{anclada} en fuentes
+	recuperadas verificables, evitando la fabricación de información.
+	
+	El alcance abarca todo el ciclo de un SRI: adquisición de datos mediante un
+	\emph{crawler} respetuoso de las políticas de los sitios, indexación con índice
+	invertido y reducción semántica, recuperación y re-ordenamiento híbrido,
+	generación de respuestas, y un módulo de evaluación cuantitativa.
+	
+	%==================================================================
+	\section{Marco Teórico}\label{sec:teoria}
+	%==================================================================
+	
+	\subsection{El modelo formal de un SRI}
+	
+	Siguiendo la formalización clásica \cite{salton1983,baeza1999}, un SRI se define
+	como una cuádrupla $\langle D, Q, F, R\rangle$. En ShealtRI, $D$ es la colección
+	de documentos médicos representados como vectores en un espacio semántico latente $\mathbb{R}^{k}$; $Q$
+	es el conjunto de consultas en lenguaje natural, normalizadas, corregidas
+	ortográficamente y proyectadas al mismo espacio; $F$ es el \emph{framework} de
+	emparejamiento, esto es, el modelo de espacio vectorial latente con similitud del
+	coseno, complementado por una fusión léxica con BM25; y $R$ es la función de
+	ranking $R(q,d)\!\in\![0,1]$ que ordena los documentos por relevancia estimada
+	para cada consulta.
+	
+	\subsection{Modelo de espacio vectorial y ponderación TF--IDF}
+	
+	El modelo de espacio vectorial representa documentos y consultas como vectores
+	sobre el vocabulario del corpus \cite{salton1983}. La componente asociada a un
+	término $t$ en un documento $d$ se pondera con el esquema TF--IDF,
+	\begin{equation}
+		w_{t,d} = \mathrm{tf}_{t,d}\cdot \log\frac{N}{\mathrm{df}_t},
+	\end{equation}
+	donde $\mathrm{tf}_{t,d}$ es la frecuencia del término en el documento, $N$ el
+	número de documentos y $\mathrm{df}_t$ la frecuencia documental de $t$. TF--IDF
+	premia los términos frecuentes en un documento pero raros en la colección, que
+	son los más discriminantes \cite{manning2008}. La relevancia entre consulta $q$
+	y documento $d$ se mide con la similitud del coseno,
+	$\mathrm{sim}(q,d)=\frac{\mathbf{q}\cdot\mathbf{d}}{\lVert\mathbf{q}\rVert\,\lVert\mathbf{d}\rVert}$.
+	
+	\subsection{Indexado Semántico Latente (LSI): el modelo no básico}
+	
+	El modelo de espacio vectorial puro sufre dos problemas léxicos bien conocidos:
+	la \emph{sinonimia} (términos distintos con igual significado, p.\,ej.\ ``infarto''
+	y ``ataque al corazón'') y la \emph{polisemia}. LSI \cite{deerwester1990} los
+	mitiga aplicando una descomposición en valores singulares truncada (truncated
+	SVD) sobre la matriz término--documento $A$ (de TF--IDF):
+	\begin{equation}
+		A \approx U_k\,\Sigma_k\,V_k^{\top},
+	\end{equation}
+	donde $U_k$, $\Sigma_k$ y $V_k^{\top}$ retienen las $k$ mayores componentes. Las
+	columnas de $V_k^{\top}$ son las representaciones de los documentos en un espacio
+	\emph{latente} de $k$ dimensiones que captura relaciones de co-ocurrencia entre
+	términos, de modo que documentos semánticamente afines quedan cercanos aunque no
+	compartan vocabulario exacto. Una consulta se proyecta al mismo espacio mediante
+	$\mathbf{q}_{\text{proj}} = \mathbf{q}^{\top} U_k \Sigma_k^{-1}$, y luego se
+	comparan los vectores por coseno. La ventaja frente a los modelos básicos
+	(booleano y vectorial puro) para el dominio médico es directa: mejora el
+	\emph{recall} ante la sinonimia abundante de la terminología clínica y reduce el
+	ruido, a la vez que produce vectores densos de baja dimensión que se almacenan e
+	indexan eficientemente en una base vectorial. La implementación se apoya en la
+	formulación de \cite{deerwester1990,manning2008} y en \texttt{scikit-learn}
+	(\texttt{TruncatedSVD} sobre \texttt{TfidfVectorizer}).
+	
+	\subsection{Re-ordenamiento híbrido, BM25 y RAG}
+	
+	BM25 \cite{robertson2009} es una función de ranking probabilística que puntúa el
+	solapamiento léxico exacto entre consulta y documento con saturación de
+	frecuencia y normalización por longitud. Combinar una señal densa (LSI, orientada
+	a \emph{recall} semántico) con una señal dispersa (BM25, orientada a la
+	\emph{precisión} del término exacto) es la técnica estándar de recuperación
+	híbrida. La Generación Aumentada por Recuperación (RAG) \cite{lewis2020}
+	antepone una etapa de recuperación a un modelo generativo: el modelo redacta su
+	respuesta condicionado a los documentos recuperados, lo que reduce las
+	alucinaciones y permite citar fuentes. La retroalimentación de relevancia de
+	Rocchio \cite{rocchio1971} re-pondera el vector de consulta acercándolo al
+	centroide de los documentos marcados como relevantes y alejándolo de los no
+	relevantes. Para diversificar recomendaciones se emplea \emph{Maximal Marginal
+		Relevance} (MMR) \cite{carbonell1998}.
+	
+	\subsection{Evaluación}
+	
+	La calidad se mide con las medidas objetivas clásicas \cite{manning2008}:
+	Precisión $P=|RR|/|RR\cup RI|$, Recobrado $R=|RR|/|RR\cup NR|$ y su media
+	armónica $F_1=2PR/(P+R)$, donde $RR$, $RI$ y $NR$ son, respectivamente, los
+	documentos relevantes recuperados, los irrelevantes recuperados y los relevantes
+	no recuperados. Como $P$, $R$ y $F_1$ ignoran el orden, se añaden medidas
+	sensibles al ranking: la ganancia acumulada descontada normalizada
+	$\mathrm{NDCG}@k=\mathrm{DCG}@k/\mathrm{IDCG}@k$ con
+	$\mathrm{DCG}@k=\sum_{i=1}^{k} \mathrm{rel}_i/\log_2(i+1)$
+	\cite{jarvelin2002}, la precisión media (MAP) y el recíproco del rango medio
+	(MRR).
+	
+	%==================================================================
+	\section{Desarrollo e Implementación}\label{sec:desarrollo}
+	%==================================================================
+	
+	\subsection{Arquitectura general}
+	
+	El sistema se implementa en Python como un \textbf{monolito modular} que
+	combina los patrones \emph{Pipeline} y \emph{Microkernel}
+	(Fig.~\ref{fig:arquitectura}). El flujo de una consulta es un \emph{pipeline} de
+	etapas fijas y obligatorias; los módulos opcionales se conectan como
+	\emph{plugins} a través de \emph{hooks} declarativos (\texttt{pre\_retrieval},
+	\texttt{post\_retrieval}, \texttt{post\_ranking}) gestionados por
+	\texttt{core/plugin\_pipeline.py}. Esta decisión arquitectónica ---frente a
+	microservicios o \emph{Clean Architecture} pura, descartados por su sobrecarga
+	para un equipo pequeño--- aporta tres beneficios: los plugins no contaminan el
+	código obligatorio (si un plugin no se registra, el pipeline simplemente lo
+	ignora), cada módulo implementa una interfaz abstracta (\texttt{core/interfaces.py})
+	y es testeable de forma aislada, y todo corre en un único proceso, reproducible
+	con Docker.
+	
+	\begin{figure}[t]
+		\centering
+		\begin{tikzpicture}[node distance=4.2mm and 6mm]
+			\node[stage] (ui) {Interfaz Web\\(FastAPI + SPA)};
+			\node[stage, below=of ui] (parse) {Parseo + Corrección\\ortográfica (Trie)};
+			\node[hook, below=of parse] (h1) {pre\_retrieval\\(expansión de consulta)};
+			\node[stage, below=of h1] (ret) {Recuperación LSI\\+ fallback web};
+			\node[hook, below=of ret] (h2) {post\_retrieval};
+			\node[stage, below=of h2] (rank) {Re-ranking híbrido\\(LSI + BM25)};
+			\node[hook, below=of rank] (h3) {post\_ranking\\(recomendación)};
+			\node[stage, below=of h3] (rag) {RAG\\(generación + evaluación)};
+			
+			\node[store, right=18mm of ret] (chroma) {ChromaDB\\(vectores LSI)};
+			\node[store, below=4mm of chroma] (docstore) {Document\\Store};
+			
+			\draw[flow] (ui)--(parse);
+			\draw[flow] (parse)--(h1);
+			\draw[flow] (h1)--(ret);
+			\draw[flow] (ret)--(h2);
+			\draw[flow] (h2)--(rank);
+			\draw[flow] (rank)--(h3);
+			\draw[flow] (h3)--(rag);
+			\draw[flow,<->] (ret)--(chroma);
+			\draw[flow,<->] (ret.east)to[out=0,in=180](docstore.west);
+			\draw[flow] (rag.east)to[out=0,in=-90](docstore.south);
+			
+			\begin{scope}[on background layer]
+				\node[draw, dotted, rounded corners, fit=(parse)(rag), inner sep=4mm,
+				label={[font=\scriptsize\itshape]right:Núcleo (pipeline + microkernel)}] {};
+			\end{scope}
+		\end{tikzpicture}
+		\caption{Arquitectura Pipeline+Microkernel. Las etapas en azul son obligatorias;
+			los recuadros verdes punteados son \emph{hooks} donde se enganchan plugins
+			opcionales; los cilindros son los dos niveles de almacenamiento.}
+		\label{fig:arquitectura}
+	\end{figure}
+	
+	\subsection{Adquisición de datos: Crawler}
+	
+	La adquisición la realiza un \emph{crawler} genérico
+	(\texttt{modules/crawler}) que separa estrictamente la lógica de E/S de la
+	extracción específica de cada sitio. Las fuentes elegidas son tres servicios de
+	salud de reputación contrastada: \textbf{MedlinePlus} (Biblioteca Nacional de
+	Medicina de EE.\,UU., con contenido en español e inglés), \textbf{Mayo Clinic} y
+	el \textbf{NHS} del Reino Unido. La confiabilidad y actualidad se aseguran por la
+	naturaleza institucional y curada de estas fuentes y porque cada documento
+	conserva en sus metadatos la fecha de última modificación declarada por el sitio.
+	
+	El descubrimiento de URLs es \emph{exclusivamente por sitemaps}: el crawler
+	obtiene los \texttt{sitemap.xml} declarados por cada \emph{scraper}, expande
+	recursivamente los \texttt{sitemapindex} (hasta una profundidad máxima de~3) y
+	construye una cola de pares (URL, scraper). Las semillas, por tanto, son los
+	sitemaps de los tres dominios. \emph{La búsqueda no sale del dominio del conjunto
+		semilla}: al no implementarse seguimiento de enlaces y al filtrar cada URL con
+	\texttt{can\_handle()} contra el dominio del scraper, el alcance queda acotado a
+	las fuentes curadas, lo que es deseable para mantener la calidad del corpus. El
+	respeto de las políticas de \emph{crawling} es explícito: se consulta y cachea el
+	\texttt{robots.txt} de cada dominio (\texttt{RobotFileParser.can\_fetch}, con
+	política \emph{fail-open}), se impone un \emph{rate limiting} por dominio
+	(retardo mínimo configurable de 2~s entre peticiones), se aplica una política de
+	reintentos con \emph{backoff} exponencial ante códigos 429/5xx, un \emph{timeout}
+	de 15~s, un \texttt{User-Agent} identificable (\texttt{MedSRIBot/1.0 (proyecto
+		académico UH)}) y un límite opcional \texttt{max\_pages}. Cada documento recibe un
+	identificador estable \texttt{UUID5} derivado de su URL, lo que hace la
+	adquisición idempotente entre re-crawls.
+	
+	\subsection{El corpus y su representatividad}
+	
+	El corpus indexado es \emph{textual}. Se compone de los documentos JSONL
+	producidos por el crawler en \texttt{data/raw/} y de capítulos de libros médicos
+	pre-procesados a JSON (ingeridos página a página, con identificadores del tipo
+	\texttt{<libro>\_p<NNN>}). La suficiencia y representatividad se persiguen por construcción: combinar tres
+	fuentes institucionales complementarias (enciclopedia médica, contenido para
+	pacientes y guías clínicas) cubre tanto el registro divulgativo como el técnico,
+	y el carácter bilingüe (es/en) amplía la cobertura terminológica. El recuento
+	exacto de documentos depende de la ejecución del crawler; el sistema reporta en
+	todo momento, mediante el endpoint \texttt{/api/stats}, el número de documentos
+	originales, de \emph{chunks}, el tamaño del vocabulario y la dimensión latente
+	$k$ efectivamente usada.
+	
+	\subsection{Indexación: índice invertido y normalización}
+	
+	La indexación (\texttt{modules/indexer}) construye un \textbf{índice invertido}
+	que mapea cada término a una lista de \emph{postings} $(\text{idx\_doc},
+	\text{tf})$. Antes, cada documento atraviesa el \texttt{TextProcessor}
+	(\texttt{modules/text\_processor}), que aplica: normalización Unicode y a
+	minúsculas, eliminación de caracteres no alfanuméricos preservando los propios
+	del español (áéíóúüñ), tokenización y lematización con \texttt{spaCy}
+	(\texttt{es\_core\_news\_md}), eliminación de \emph{stopwords} (NLTK español más
+	una lista de \emph{stopwords} de dominio médico) y filtrado por longitud
+	(2--20 caracteres). Los documentos largos se fragmentan previamente con un
+	\texttt{TextChunker} (ventanas fijas de 300 palabras con solape de 50), de modo
+	que cada \emph{chunk} es una unidad recuperable independiente que conserva en sus
+	metadatos el \texttt{original\_doc\_id}. El vocabulario se ordena
+	alfabéticamente (columnas deterministas) y se descartan los términos con
+	frecuencia total inferior a~2, filtrando ruido y erratas. Como subproducto, los
+	tokens lematizados de los documentos alimentan el vocabulario del corrector
+	ortográfico (un \textbf{Trie} con distancia de Levenshtein) que más tarde corrige
+	las consultas.
+	
+	\subsection{Modelo LSI, embeddings y base de datos vectorial}
+	
+	Sobre el índice invertido, \texttt{TfidfProcessor} construye la matriz TF--IDF y
+	\texttt{LSIModel} (envoltorio de \texttt{TruncatedSVD}, $k=100$,
+	\texttt{n\_iter}=7, semilla fija) la reduce al espacio latente. \textbf{Los
+		vectores latentes resultantes son los \emph{embeddings} del sistema}: no se
+	emplea un modelo de \emph{embeddings} neuronal externo, sino la propia proyección
+	LSI, coherente con el modelo de recuperación elegido y reproducible sin
+	dependencias de servicios en la nube. Estos vectores se almacenan en
+	\textbf{ChromaDB}, configurado con espacio coseno (\texttt{hnsw:space=cosine}); la
+	búsqueda por similitud usa el índice aproximado HNSW de ChromaDB, eficiente para
+	hallar los vecinos más cercanos en alta dimensión sin recorrer toda la colección.
+	
+	El almacenamiento es de \textbf{dos niveles}: ChromaDB guarda únicamente IDs,
+	vectores y metadatos mínimos (URL), mientras que el contenido completo reside en
+	un \texttt{FileSystemDocumentStore}. Esta separación evita inflar la base
+	vectorial, permite actualizar contenido sin re-indexar vectores y optimiza cada
+	almacén para su propósito. Para información nueva, el sistema implementa
+	\emph{indexación dinámica} (\emph{folding-in}, Fig.~\ref{fig:flujo}): un documento
+	nuevo se vectoriza con la TF--IDF e IDF ya fijadas y se proyecta sobre la base
+	latente existente sin reentrenar la SVD ($\mathbf{d}_{\text{proj}}=\mathbf{d}\,V_k$),
+	y luego se anexa a ambos almacenes. Cuando la fracción de documentos añadidos por
+	\emph{folding-in} supera el 20\,\% se dispara un re-ajuste completo
+	(``balanceo'') que recaptura el vocabulario nuevo.
+	
+	\subsection{Flujo \emph{end-to-end} de una consulta}
+	
+	La Fig.~\ref{fig:flujo} narra el recorrido completo. (1)~El usuario escribe en la
+	interfaz web y la petición llega a \texttt{POST /api/query}. (2)~\texttt{Indexer.
+		build\_query} normaliza y \emph{corrige ortográficamente} la consulta contra el
+	vocabulario del Trie; un mecanismo de interfaz permite además elegir entre la
+	consulta corregida o la original tal cual se escribió. (3)~En el \emph{hook}
+	\texttt{pre\_retrieval}, el plugin de expansión enriquece la consulta con
+	sinónimos médicos. (4)~El \texttt{LSIRetriever} vectoriza con TF--IDF (descartando
+	términos fuera de vocabulario), proyecta al espacio latente y realiza la
+	\emph{recuperación en dos fases}: búsqueda vectorial en ChromaDB
+	$\rightarrow$ IDs+scores, y recuperación del texto completo en el Document Store.
+	(5)~Si existen juicios de relevancia previos para esa consulta, se aplica Rocchio
+	sobre el vector latente. (6)~El \texttt{FallbackRetriever} decide si activar la
+	búsqueda web. (7)~Tras \texttt{post\_retrieval}, el \texttt{HybridRanker}
+	re-ordena por puntuación híbrida. (8)~En \texttt{post\_ranking} se preparan las
+	recomendaciones. (9)~El \texttt{RAGService} genera la respuesta y el
+	\texttt{RAGEvaluator} la puntúa. El resultado (documentos, respuesta, métricas y
+	sugerencias) se serializa y se renderiza.
+	
+	\begin{figure}[t]
+		\centering
+		\begin{tikzpicture}[node distance=3.6mm and 5mm]
+			\node[stage] (q) {Consulta del usuario};
+			\node[stage, below=of q] (spell) {Corrección ortográfica\\(Trie + Levenshtein)};
+			\node[stage, below=of spell] (exp) {Expansión por tesauro\\(pre\_retrieval)};
+			\node[stage, below=of exp] (tfidf) {TF--IDF transform\\$\rightarrow$ proyección LSI};
+			\node[stage, below=of tfidf] (search) {Búsqueda coseno\\en ChromaDB (top-k)};
+			\node[stage, below=of search] (rocchio) {Rocchio\\(si hay feedback)};
+			\node[stage, below=of rocchio] (fb) {¿Insuficiente?\\$\rightarrow$ fallback web};
+			\node[stage, below=of fb] (hr) {HybridRanker\\$0.6\cdot$LSI$+0.4\cdot$BM25};
+			\node[stage, below=of hr] (rag) {RAG (Groq) +\\evaluación de calidad};
+			\node[stage, below=of rag] (out) {Render: tarjetas +\\respuesta + métricas};
+			
+			\foreach \a/\b in {q/spell, spell/exp, exp/tfidf, tfidf/search, search/rocchio,
+				rocchio/fb, fb/hr, hr/rag, rag/out}
+			\draw[flow] (\a)--(\b);
+		\end{tikzpicture}
+		\caption{Flujo \emph{end-to-end} de una consulta y módulos activados en orden.}
+		\label{fig:flujo}
+	\end{figure}
+	
+	\subsection{Detección de información insuficiente y búsqueda web}
+	
+	El \texttt{FallbackRetriever} decide que ``lo indexado no satisface la
+	necesidad'' mediante tres criterios combinados: (i)~\emph{conteo}, cuando la
+	recuperación local devuelve menos de \texttt{min\_results}=3 documentos;
+	(ii)~\emph{puntuación}, cuando el mejor resultado local queda por debajo de
+	\texttt{min\_score}=0.35; y (iii)~\emph{recencia}, cuando la consulta contiene
+	marcas temporales (años 2020--2029, ``última hora'', ``nuevo tratamiento'',
+	``actualizado'', etc.), pues el corpus curado puede no reflejar lo más reciente.
+	Al activarse, el \texttt{InternetSearchRetriever} consulta DuckDuckGo (biblioteca
+	\texttt{ddgs}), descarga y limpia las páginas con \texttt{WebContentFetcher}
+	(\texttt{requests}+\texttt{BeautifulSoup}), asigna puntuaciones decrecientes por
+	posición y marca los documentos con \texttt{origin="web"}. Los resultados web se
+	\emph{fusionan} con los locales deduplicando por \texttt{doc\_id} (conservando la
+	mayor puntuación) y se ordenan por score; además se \emph{cachean} en el
+	Document Store para reutilizarse en consultas idénticas posteriores, evitando
+	nuevas llamadas de red.
+	
+	\subsection{Re-ranking, factores de ordenamiento y posicionamiento visual}
+	
+	El \texttt{HybridRanker} produce el orden final fusionando dos señales
+	normalizadas a $[0,1]$ por min--max: la similitud latente LSI (peso 0.6) y la
+	puntuación léxica BM25 (peso 0.4), de modo que ningún criterio domine por escala.
+	Además de la relevancia, intervienen otros factores: la \emph{frescura}
+	(consultas marcadas como recientes desvían hacia resultados web actuales), el
+	\emph{tipo/origen de contenido} (local frente a web, señalizado con insignias) y
+	el \emph{perfil del usuario}, que el recomendador traduce en un \emph{boost}
+	multiplicativo conservador (1.05--1.10) hacia las fuentes preferidas de cada
+	perfil (p.\,ej.\ MedlinePlus para pacientes y cuidadores; Mayo Clinic/NHS para
+	profesionales). Dos consultas equivalentes con perfiles distintos, o una consulta
+	con marca de recencia frente a otra sin ella, producen así ordenamientos
+	observablemente diferentes.
+	
+	En la interfaz (Fig.~\ref{fig:ui}), el posicionamiento responde a estas
+	decisiones de diseño: los documentos se presentan como tarjetas ordenadas de
+	arriba a abajo por puntuación híbrida descendente ---el primero es el más
+	relevante---, cada tarjeta muestra título, fuente enlazable, un \emph{snippet}
+	sensible a la consulta (la ventana de texto con mayor densidad de términos
+	buscados) y un indicador porcentual de relevancia; una insignia distingue
+	visualmente el contenido \emph{Local} del \emph{Web}. La respuesta generada por
+	RAG ocupa un panel lateral propio para separar claramente ``documentos fuente''
+	de ``respuesta sintetizada'', y un panel inferior de recomendaciones
+	(``También te puede interesar'') agrupa contenido nuevo relacionado sin
+	interferir con el ranking principal.
+	
+	
+\begin{figure}[t]
+	\centering
+	\includegraphics[width=1\linewidth, height=.3\textheight]{"figuras/ShealthRI UI"}
+	\caption{Interfaz de ShealtRI: barra de búsqueda con conmutadores (corrección ortográfica e inclusión de resultados web), tarjetas de resultados ordenadas por relevancia con insignias de origen, y panel lateral con la respuesta RAG.}
+	\label{fig:shealthri-ui}
+\end{figure}
+	
+	\subsection{Generación aumentada por recuperación (RAG)}
+	
+	El \texttt{RAGService} produce una respuesta adaptada a uno de seis perfiles de
+	usuario (paciente, estudiante de medicina, profesional, asistente de diagnóstico,
+	medicina natural y cuidador), cada uno con su propia plantilla de \emph{system
+		prompt}, tono y áreas de enfoque. El proceso es: (1)~se re-ordenan los documentos
+	con el \texttt{HybridRanker}; (2)~se construye un \emph{bloque de contexto} con a
+	lo sumo los \textbf{3 documentos} mejor posicionados, recortando cada uno a
+	800~caracteres ---es decir, \emph{no} se pasa todo lo recuperado, sino lo
+	priorizado por relevancia---; (3)~se renderiza el \emph{prompt} insertando
+	consulta y contexto; (4)~se invoca el modelo alojado en Groq
+	(\texttt{llama-3.1-8b-instant}, \texttt{temperature}=0.3, \texttt{top\_p}=0.9,
+	\texttt{max\_tokens}=1024). La \textbf{mitigación de alucinaciones} es
+	estructural: el \emph{prompt} ancla explícitamente la respuesta a la sección
+	``Información de referencia: \{context\}'' e instruye al modelo a \emph{indicar
+		expresamente cuando los documentos de referencia son insuficientes}; la baja
+	temperatura reduce la divagación. Si no hay clave de API o la llamada falla, el
+	sistema degrada con elegancia a una \emph{respuesta de plantilla} que presenta
+	directamente los \emph{snippets} recuperados. Por último, un \texttt{RAGEvaluator}
+	puntúa cada respuesta en fidelidad, anclaje (\emph{groundedness}) y relevancia del
+	contexto, métricas que la interfaz expone como indicador de calidad.
+	
+	\subsection{Plugins opcionales: expansión, retroalimentación y recomendación}
+	
+	Coherentes con el microkernel, los módulos opcionales se enganchan sin tocar el
+	núcleo. La \textbf{expansión de consultas} (\texttt{plugins/expansion}, hook
+	\texttt{pre\_retrieval}) busca cada término en un tesauro médico y añade sus
+	sinónimos, abreviaturas y formas coloquiales al índice invertido de la consulta,
+	filtrando los que no estén en el vocabulario del corpus y limitando a 6 términos
+	para evitar la \emph{deriva de consulta}. La \textbf{retroalimentación de
+		relevancia} (\texttt{plugins/feedback}) persiste los juicios del usuario
+	(pulgar arriba/abajo en cada tarjeta) y, en la siguiente búsqueda de la misma
+	consulta, aplica Rocchio (\(\alpha=1.0,\ \beta=0.75,\ \gamma=0.15\)) sobre el
+	vector latente, acercándolo al centroide de lo relevante. El \textbf{recomendador}
+	(\texttt{modules/recommender}) parte de los primeros resultados como semilla,
+	calcula un centroide en el espacio LSI, recupera candidatos por coseno y los
+	re-ordena con MMR ($\lambda=0.7$) para que la lista sea afín pero diversa,
+	colapsando además páginas del mismo libro para no mostrar duplicados.
+	
+	%==================================================================
+	\section{Evaluación y Resultados}\label{sec:evaluacion}
+	%==================================================================
+	
+	El módulo de evaluación (\texttt{modules/evaluation}) implementa, como funciones
+	puras y testeables, todas las medidas de la Sección~\ref{sec:teoria}: $P$, $R$,
+	$F_1$ y $F_\beta$ general, $P@k$, $R@k$, \emph{Fallout}@k, MRR, MAP, DCG y
+	NDCG@k. Sobre un conjunto de 10 consultas de prueba de dominio biomédico
+	(\texttt{eval\_queries.json}) con sus juicios de relevancia
+	(\texttt{eval\_qrels.json}), el endpoint \texttt{/api/eval} ejecuta el
+	recuperador LSI y reporta tanto las métricas agregadas como el desglose por
+	consulta, mostrándolos en la sección ``Evaluación'' de la interfaz
+	(Tabla~\ref{tab:metricas}). El recobrado del corpus completo (\emph{Fallout}) se
+	calcula contra el número de documentos \emph{originales} ---no de \emph{chunks}---
+	para que el denominador sea coherente. Los valores numéricos concretos dependen
+	del corpus efectivamente crawleado en cada despliegue; la infraestructura de
+	evaluación permite reproducir la medición con un solo comando
+	(\texttt{python cli.py --eval --eval-k 10}) y comparar LSI puro contra LSI con
+	re-ranking híbrido (\texttt{--rerank}).
+	
+	\begin{table}[t]
+		\centering
+		\caption{Métricas implementadas en el módulo de evaluación y su rol.}
+		\label{tab:metricas}
+		\begin{tabular}{@{}lll@{}}
+			\toprule
+			\textbf{Métrica} & \textbf{Sensible al orden} & \textbf{Qué mide} \\
+			\midrule
+			Precisión / Recobrado / $F_1$ & No & Calidad del conjunto recuperado \\
+			$P@k$ / $R@k$ / Fallout@k      & Parcial (corte $k$) & Calidad en el top-$k$ \\
+			MAP                            & Sí & Precisión media sobre relevantes \\
+			MRR                            & Sí & Posición del primer acierto \\
+			NDCG@k                         & Sí & Ganancia graduada con descuento \\
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	%==================================================================
+	\section{Deficiencias, Conclusiones y Trabajo Futuro}\label{sec:conclusiones}
+	%==================================================================
+	
+	ShealtRI demuestra que un SRI médico completo ---adquisición, indexación
+	semántica, recuperación híbrida, fallback web y RAG--- puede construirse como un
+	monolito modular reproducible, manteniendo cada responsabilidad aislada y
+	testeable. No obstante, detectamos varias deficiencias y sus posibles soluciones.
+	Primero, la base latente de LSI es \emph{estática}: los documentos añadidos por
+	\emph{folding-in} no aportan vocabulario nuevo hasta el ``balanceo'', y los
+	documentos web recuperados se cachean pero no se integran al espacio
+	latente en la misma consulta; un trabajo futuro sería re-ajustar la SVD de forma
+	incremental o adoptar \emph{embeddings} neuronales (\emph{sentence-transformers})
+	que toleren vocabulario abierto. Segundo, el corpus puede quedar
+	desactualizado frente a la evidencia médica reciente; integrar fuentes con
+	\emph{feeds} fechados y un re-crawl programado lo mitigaría. Tercero, el Trie del
+	corrector no se contrae al eliminar documentos, por lo que puede sugerir términos
+	ya no indexados. Cuarto, el conjunto de evaluación es pequeño (10 consultas);
+	ampliarlo con juicios de relevancia graduados por especialistas daría medidas más
+	robustas. Finalmente, el sistema es solo textual: la recuperación multimodal de
+	imágenes médicas queda como extensión.
+	
+	Bajo condiciones idílicas y empezando de cero, mantendríamos el patrón
+	Pipeline+Microkernel ---que demostró su valor para entregas incrementales--- pero
+	adoptaríamos desde el inicio \emph{embeddings} densos neuronales como
+	representación primaria (con LSI como línea base comparativa), un índice vectorial
+	con actualización verdaderamente incremental, y evaluación amplia y
+	validada clínicamente. La separación de almacenamiento en dos niveles, la fusión
+	híbrida y el anclaje estricto del RAG se conservarían sin cambios, por haber
+	resultado decisiones acertadas.
+	
+	%==================================================================
+	\begin{thebibliography}{10}
+		
+		\bibitem{manning2008} Manning, C.D., Raghavan, P., Schütze, H.: Introduction to
+		Information Retrieval. Cambridge University Press, Cambridge (2008)
+		
+		\bibitem{baeza1999} Baeza-Yates, R., Ribeiro-Neto, B.: Modern Information
+		Retrieval. ACM Press / Addison-Wesley, New York (1999)
+		
+		\bibitem{salton1983} Salton, G., McGill, M.J.: Introduction to Modern Information
+		Retrieval. McGraw-Hill, New York (1983)
+		
+		\bibitem{deerwester1990} Deerwester, S., Dumais, S.T., Furnas, G.W., Landauer,
+		T.K., Harshman, R.: Indexing by Latent Semantic Analysis. J. Am. Soc. Inf. Sci.
+		41(6), 391--407 (1990)
+		
+		\bibitem{robertson2009} Robertson, S., Zaragoza, H.: The Probabilistic Relevance
+		Framework: BM25 and Beyond. Found. Trends Inf. Retr. 3(4), 333--389 (2009)
+		
+		\bibitem{rocchio1971} Rocchio, J.J.: Relevance Feedback in Information Retrieval.
+		In: Salton, G. (ed.) The SMART Retrieval System: Experiments in Automatic
+		Document Processing, pp. 313--323. Prentice-Hall, Englewood Cliffs (1971)
+		
+		\bibitem{carbonell1998} Carbonell, J., Goldstein, J.: The Use of MMR,
+		Diversity-Based Reranking for Reordering Documents and Producing Summaries. In:
+		Proc. 21st ACM SIGIR, pp. 335--336. ACM, New York (1998)
+		
+		\bibitem{lewis2020} Lewis, P., et al.: Retrieval-Augmented Generation for
+		Knowledge-Intensive NLP Tasks. In: Advances in Neural Information Processing
+		Systems (NeurIPS), vol. 33, pp. 9459--9474 (2020)
+		
+		\bibitem{jarvelin2002} Järvelin, K., Kekäläinen, J.: Cumulated Gain-Based
+		Evaluation of IR Techniques. ACM Trans. Inf. Syst. 20(4), 422--446 (2002)
+		
+		\bibitem{chroma} Chroma: the open-source embedding database,
+		\url{https://www.trychroma.com}
+		
+		\bibitem{spacy} Honnibal, M., Montani, I.: spaCy: Industrial-Strength Natural
+		Language Processing in Python, \url{https://spacy.io}
+		
+		\bibitem{sklearn} Pedregosa, F., et al.: Scikit-learn: Machine Learning in
+		Python. J. Mach. Learn. Res. 12, 2825--2830 (2011)
+		
+		\bibitem{medlineplus} U.S. National Library of Medicine: MedlinePlus,
+		\url{https://medlineplus.gov}
+		
+	\end{thebibliography}
+	
+	
+\end{document}

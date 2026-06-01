@@ -100,6 +100,9 @@ class PipelineContext:
     query: Query
     results: list[RetrievedDocument] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class RAGResponse:
     """Encapsulates a generated answer and its provenance.
 
