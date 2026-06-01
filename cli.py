@@ -263,6 +263,11 @@ class Pipeline:
 
     def _cold_start(self) -> None:
         """Parse corpus, fit LSI, persist artifacts for future warm starts."""
+        import time as _time
+
+        t_total = _time.monotonic()
+
+        t0 = _time.monotonic()
         print("  reading documents from data/raw/...", end=" ", flush=True)
         real_docs = _load_from_raw_dir()
         if real_docs:
@@ -271,25 +276,31 @@ class Pipeline:
         else:
             documents = _load_synthetic_documents()
             self._source_label = f"synthetic corpus ({len(documents)} docs)"
-        print("done")
+        print(f"done  ({_time.monotonic() - t0:.1f}s)")
 
         print(f"  source  : {self._source_label}")
+
+        t0 = _time.monotonic()
         print("  indexing...", end=" ", flush=True)
         self.corpus = self.indexer.build(documents)
-        print("done")
+        print(f"done  ({_time.monotonic() - t0:.1f}s)")
 
         stats = IndexerService.stats(self.corpus)
         n_docs = stats["n_documents"]
         n_terms = stats["n_terms"]
 
+        t0 = _time.monotonic()
         print(f"  fitting LSI (n_components=100)...", end=" ", flush=True)
         self.retriever.fit(self.corpus)
-        print(f"done  [{n_docs} docs, {n_terms} terms]")
+        print(f"done  [{n_docs} docs, {n_terms} terms]  ({_time.monotonic() - t0:.1f}s)")
 
+        t0 = _time.monotonic()
         print("  saving model to disk...", end=" ", flush=True)
         Path(_MODELS_DIR).mkdir(parents=True, exist_ok=True)
         self.lsi.save(_MODELS_DIR)
-        print("done  (future startups will be fast)")
+        print(f"done  ({_time.monotonic() - t0:.1f}s)")
+
+        print(f"\n  cold start total: {_time.monotonic() - t_total:.1f}s")
 
         # Register optional plugins now that the fitted vocabulary is available.
         self._register_plugins()
