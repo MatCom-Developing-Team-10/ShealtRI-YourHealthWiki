@@ -23,8 +23,14 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from core.models import UserProfile, UserProfileType
 from cli import Pipeline
+from modules.document_reconstructor import DocumentReconstructor
 from modules.evaluation.service import EvaluationService, _build_lsi_search_fn
 from modules.evaluation.dataset import load_dataset
+
+_document_reconstructor = DocumentReconstructor(
+    documents_dir=_PROJECT_ROOT / "data" / "documents",
+    cache_dir=_PROJECT_ROOT / "data" / "pdf_reconstructed",
+)
 
 
 def extract_snippet(text: str, query: str, length: int = 300) -> str:
@@ -328,14 +334,29 @@ def recommend_endpoint(req: RecommendRequest) -> RecommendResponse:
 
 @app.get("/api/document")
 def serve_document(path: str) -> FileResponse:
-    """Serve a local document file so the browser can open it."""
+    """Serve a local document file, reconstructing from chunks if missing.
+
+    When the original PDF cannot be found on disk, the request is satisfied
+    by asking ``DocumentReconstructor`` to rebuild a text-only PDF from every
+    indexed chunk that shares the same ``url``. The reconstruction is cached
+    under ``data/pdf_reconstructed`` so the linear scan only runs once per
+    missing source.
+    """
     resolved = (_PROJECT_ROOT / path).resolve()
     allowed_root = (_PROJECT_ROOT / "data").resolve()
     if not str(resolved).startswith(str(allowed_root)):
         raise HTTPException(status_code=403, detail="Access denied")
-    if not resolved.exists():
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(str(resolved))
+    if resolved.exists():
+        return FileResponse(str(resolved))
+
+    reconstructed = _document_reconstructor.reconstruct(path)
+    if reconstructed is not None and reconstructed.exists():
+        return FileResponse(
+            str(reconstructed),
+            media_type="application/pdf",
+            filename=reconstructed.name,
+        )
+    raise HTTPException(status_code=404, detail="File not found")
 
 
 def _original_doc_count() -> int:

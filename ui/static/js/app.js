@@ -284,7 +284,7 @@ async function loadStats() {
     }
 }
 
-async function fetchRecommendations(seedDocIds, profile, excludeIds = null) {
+async function fetchRecommendations(seedDocIds, profile, excludeIds = null, excludeSources = null) {
     const panel = document.getElementById('recommendations-panel');
     const list = document.getElementById('recommendations-list');
 
@@ -299,7 +299,7 @@ async function fetchRecommendations(seedDocIds, profile, excludeIds = null) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 seed_doc_ids: seedDocIds,
-                top_k: 3,
+                top_k: 6,
                 profile: profile,
                 exclude_ids: excludeIds || seedDocIds,
             }),
@@ -307,19 +307,27 @@ async function fetchRecommendations(seedDocIds, profile, excludeIds = null) {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
 
-        if (!data.items || data.items.length === 0) {
+        // Chunks of the same source file have distinct doc_ids but the same
+        // URL, so `exclude_ids` alone can't dedupe them. Filter client-side
+        // by source against what's already on screen, then cap at 3.
+        const skip = new Set(excludeSources || []);
+        const seenSources = new Set();
+        const items = (data.items || []).filter(item => {
+            const src = (item.source || '').trim();
+            if (!src || skip.has(src) || seenSources.has(src)) return false;
+            seenSources.add(src);
+            return true;
+        }).slice(0, 3);
+
+        if (items.length === 0) {
             panel.hidden = true;
             return;
         }
 
-        list.innerHTML = data.items.map(item => `
+        list.innerHTML = items.map(item => `
             <div class="recommendation-card" data-doc="${escapeHtml(item.doc_id)}" data-url="${escapeHtml(item.source)}">
                 <div class="recommendation-title">${escapeHtml(item.title)}</div>
-                <div class="recommendation-snippet">${escapeHtml(item.snippet)}</div>
-                <div class="recommendation-footer">
-                    <span>${escapeHtml(extractSourceLabel(item.source))}</span>
-                    <span class="recommendation-similarity">${(item.similarity * 100).toFixed(0)}% similitud</span>
-                </div>
+                <span class="recommendation-similarity">${(item.similarity * 100).toFixed(0)}%</span>
             </div>
         `).join('');
 
@@ -459,65 +467,6 @@ function escapeHtml(text) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Query History (localStorage)
-// ─────────────────────────────────────────────────────────────────────────────
-
-const HISTORY_KEY = 'shealtri_history';
-const HISTORY_MAX = 10;
-
-function saveToHistory(queryText) {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    let history = [];
-    try { history = raw ? JSON.parse(raw) : []; } catch { history = []; }
-
-    // Remove duplicate if exists, then prepend
-    history = history.filter(h => h.text !== queryText);
-    history.unshift({ text: queryText, timestamp: Date.now() });
-    if (history.length > HISTORY_MAX) history = history.slice(0, HISTORY_MAX);
-
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-}
-
-function relativeTime(ts) {
-    const diff = Math.floor((Date.now() - ts) / 1000);
-    if (diff < 60) return 'hace un momento';
-    if (diff < 3600) return `hace ${Math.floor(diff / 60)} min`;
-    if (diff < 86400) return `hace ${Math.floor(diff / 3600)} h`;
-    return `hace ${Math.floor(diff / 86400)} d`;
-}
-
-function renderHistorial() {
-    const panel = document.getElementById('historial-panel');
-    const list = document.getElementById('historial-list');
-    const raw = localStorage.getItem(HISTORY_KEY);
-    let history = [];
-    try { history = raw ? JSON.parse(raw) : []; } catch { history = []; }
-
-    list.innerHTML = '';
-
-    if (history.length === 0) {
-        list.innerHTML = '<p class="historial-empty">No hay búsquedas recientes</p>';
-    } else {
-        history.forEach(item => {
-            const btn = document.createElement('button');
-            btn.className = 'historial-item';
-            btn.innerHTML = `
-                <span class="historial-text">${escapeHtml(item.text)}</span>
-                <span class="historial-time">${relativeTime(item.timestamp)}</span>
-            `;
-            btn.addEventListener('click', () => {
-                document.getElementById('search-input').value = item.text;
-                panel.hidden = true;
-                executeQuery(item.text);
-            });
-            list.appendChild(btn);
-        });
-    }
-
-    panel.hidden = false;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Evaluation Metrics (Biblioteca nav)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -631,7 +580,6 @@ async function executeQuery(queryText, options = {}) {
     const webBanner = document.getElementById('web-fallback-banner');
     const ragMeta = document.getElementById('rag-meta');
     const ragQuality = document.getElementById('rag-quality');
-    const historialPanel = document.getElementById('historial-panel');
     const recommendationsPanel = document.getElementById('recommendations-panel');
 
     // Hide auxiliary elements at the start
@@ -641,7 +589,6 @@ async function executeQuery(queryText, options = {}) {
     webBanner.hidden = true;
     ragMeta.hidden = true;
     ragQuality.hidden = true;
-    historialPanel.hidden = true;
     recommendationsPanel.hidden = true;
     _lastQueryText = queryText;
 
@@ -689,10 +636,13 @@ async function executeQuery(queryText, options = {}) {
         // Fire the recommender in parallel (it's not on the critical path —
         // results are already rendered). Uses the top-3 result doc_ids as
         // the seed and excludes everything already shown so the panel only
-        // surfaces *new* documents.
+        // surfaces *new* documents. Pass source URLs too — chunked corpora
+        // share a source across distinct doc_ids, so id-only exclusion leaks
+        // through.
         const seeds = data.results.slice(0, 3).map(r => r.doc_id).filter(Boolean);
         const excludes = data.results.map(r => r.doc_id).filter(Boolean);
-        fetchRecommendations(seeds, currentProfile, excludes);
+        const excludeSources = data.results.map(r => (r.source || '').trim()).filter(Boolean);
+        fetchRecommendations(seeds, currentProfile, excludes, excludeSources);
 
         // Query time
         if (data.query_time_ms != null) {
@@ -709,8 +659,6 @@ async function executeQuery(queryText, options = {}) {
         if (data.used_web_fallback) {
             webBanner.hidden = false;
         }
-
-        saveToHistory(queryText);
 
         // Switch to calmer responding video, then idle after 5 s
         if (respondingSource) {
@@ -746,19 +694,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     searchBtn.addEventListener('click', () => executeQuery(searchInput.value));
     searchInput.addEventListener('keypress', e => {
         if (e.key === 'Enter') executeQuery(searchInput.value);
-    });
-
-    document.getElementById('nav-historial').addEventListener('click', () => {
-        const panel = document.getElementById('historial-panel');
-        if (panel.hidden) {
-            renderHistorial();
-        } else {
-            panel.hidden = true;
-        }
-    });
-
-    document.getElementById('historial-close').addEventListener('click', () => {
-        document.getElementById('historial-panel').hidden = true;
     });
 
     document.getElementById('nav-biblioteca').addEventListener('click', () => {

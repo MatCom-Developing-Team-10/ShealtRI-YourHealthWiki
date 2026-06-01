@@ -407,16 +407,18 @@ class Pipeline:
         query = context.query
 
         # Honour the UI toggle: temporarily lower min_results so the fallback
-        # fires regardless of how many local results the LSI returned.
+        # fires regardless of how many local results the LSI returned. The
+        # try/finally is load-bearing — without it, an exception during
+        # execute_search would leak the elevated threshold to every later
+        # request, forcing the web fallback even when the user toggled it off.
         original_min = self.retriever.min_results
         if force_web:
             self.retriever.min_results = top_k + 1
-
-        # Retrieval.
-        context.results = self.context.execute_search(query, top_k=top_k)
-
-        if force_web:
-            self.retriever.min_results = original_min
+        try:
+            context.results = self.context.execute_search(query, top_k=top_k)
+        finally:
+            if force_web:
+                self.retriever.min_results = original_min
 
         # post_retrieval: plugins act on the raw retrieved set before ranking.
         context = self.plugins.run_hook("post_retrieval", context)
