@@ -51,6 +51,17 @@ class TextProcessorConfig:
         batch_size: Number of documents fed to spaCy's ``nlp.pipe`` per batch
             when processing a collection (default: 64). Larger batches improve
             throughput on big corpora at the cost of higher peak memory.
+        n_process: Number of worker processes used by spaCy's ``nlp.pipe`` when
+            indexing a large collection (default: 1 = single process). Values
+            greater than 1 parallelize lemmatization across CPU cores, which is
+            the dominant cost of a cold start. Only applied on the indexing path
+            and only when the batch is at least ``multiprocess_threshold`` texts
+            (forking has fixed overhead that hurts small batches and single
+            queries). See :meth:`TextProcessor.process_many`.
+        multiprocess_threshold: Minimum number of texts in a single
+            ``process_many`` call before ``n_process`` > 1 is actually used.
+            Below this, processing stays single-process to avoid paying the
+            multiprocessing fork/IPC overhead on a workload too small to benefit.
     """
 
     language: str = "spanish"
@@ -61,6 +72,8 @@ class TextProcessorConfig:
     lowercase: bool = True
     custom_stopwords: set[str] = field(default_factory=set)
     batch_size: int = 64
+    n_process: int = 1
+    multiprocess_threshold: int = 500
 
 
 class TextProcessor:
@@ -214,10 +227,28 @@ class TextProcessor:
 
         normalized = [self.normalize(text) if text else "" for text in texts]
 
+        # Parallelize lemmatization across CPU cores on the indexing path only.
+        # Queries (is_query=True) and small batches stay single-process: spaCy's
+        # multiprocessing forks workers and serializes Docs over a pipe, overhead
+        # that only pays off on a large indexing collection.
+        effective_n_process = (
+            self.config.n_process
+            if (
+                not is_query
+                and self.config.n_process > 1
+                and len(normalized) >= self.config.multiprocess_threshold
+            )
+            else 1
+        )
+
         results: list[str] = []
         vocabulary_tokens: set[str] = set()
 
-        for doc in self._nlp.pipe(normalized, batch_size=self.config.batch_size):
+        for doc in self._nlp.pipe(
+            normalized,
+            batch_size=self.config.batch_size,
+            n_process=effective_n_process,
+        ):
             tokens = self._extract_tokens(doc)
             if is_query:
                 if apply_correction:

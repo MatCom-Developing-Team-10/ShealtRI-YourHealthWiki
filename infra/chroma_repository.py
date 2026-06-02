@@ -82,7 +82,7 @@ class ChromaRepository(BaseRepository):
         batch_size = self._max_batch_size()
         for start in range(0, len(ids), batch_size):
             end = start + batch_size
-            self.collection.add(
+            self.collection.upsert(
                 ids=ids[start:end],
                 documents=None,  # Don't store full text - use DocumentStore instead
                 metadatas=metadatas[start:end],

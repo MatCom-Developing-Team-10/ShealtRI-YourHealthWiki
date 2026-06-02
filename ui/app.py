@@ -8,9 +8,26 @@ Serves:
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
+
+# Pin native math libraries to a single thread BEFORE numpy is imported anywhere.
+# The indexer lemmatizes via spaCy's nlp.pipe(n_process>1), which forks workers;
+# a multithreaded BLAS pool existing at fork time makes the LSI TruncatedSVD
+# deadlock ("hangs at fitting LSI"). This must run before the first numpy-backed
+# import below (core.models / cli), so it lives at the top of the UI entrypoint
+# too, mirroring cli.py.
+for _thread_var in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+):
+    os.environ.setdefault(_thread_var, "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -163,10 +180,12 @@ class ProfileOption(BaseModel):
 app = FastAPI(title="ShealtRI UI Backend", version="1.0.0")
 
 # Load and build the pipeline once on startup
+import time as _time
 _pipeline = Pipeline()
 print("[startup] Loading pipeline...", flush=True)
+_t0 = _time.monotonic()
 _pipeline.build()
-print("[startup] Pipeline ready.", flush=True)
+print(f"[startup] Pipeline ready.  ({_time.monotonic() - _t0:.1f}s)", flush=True)
 
 # Profile mapping
 _PROFILE_MAP: dict[str, UserProfileType] = {

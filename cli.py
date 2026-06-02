@@ -22,10 +22,28 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# spaCy's nlp.pipe(n_process>1) forks worker processes during indexing. If a
+# multithreaded native BLAS pool already exists at fork time, the TruncatedSVD
+# used to fit LSI deadlocks afterwards — the "hangs at fitting LSI" symptom.
+# Pinning the math libraries to a single thread *before* numpy is imported
+# removes the threaded state the fork would corrupt; the SVD on this corpus is
+# small enough that single-threaded BLAS costs nothing. Must precede every
+# numpy-backed import below.
+for _thread_var in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+):
+    os.environ.setdefault(_thread_var, "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 from dotenv import load_dotenv
 load_dotenv()  # Load .env file for GEMINI_API_KEY and other config
@@ -49,7 +67,7 @@ from modules.ranker.service import HybridRanker
 from modules.retriever.fallback_retriever import FallbackRetriever
 from modules.retriever.service import LSIRetriever
 from modules.web_search import InternetSearchRetriever, WebContentFetcher
-from modules.text_processor.service import TextProcessor
+from modules.text_processor.service import TextProcessor, TextProcessorConfig
 from modules.rag.evaluator import RAGEvaluator
 from modules.rag.service import RAGService
 from modules.recommender import ContentBasedRecommender
@@ -124,6 +142,7 @@ def _load_from_raw_dir() -> list[Document] | None:
         return None
 
     documents: list[Document] = []
+    seen_ids: set[str] = set()
 
     # JSONL files (crawler output format)
     for jsonl_file in sorted(_RAW_DIR.glob("*.jsonl")):
@@ -134,8 +153,12 @@ def _load_from_raw_dir() -> list[Document] | None:
                     if not line:
                         continue
                     data = json.loads(line)
+                    doc_id = str(data["doc_id"])
+                    if doc_id in seen_ids:
+                        continue
+                    seen_ids.add(doc_id)
                     documents.append(Document(
-                        doc_id=str(data["doc_id"]),
+                        doc_id=doc_id,
                         text=str(data["text"]),
                         url=str(data.get("url", "")),
                         metadata=data.get("metadata", {}),
@@ -233,7 +256,15 @@ class Pipeline:
         instead of re-parsing the full corpus (warm start).
         """
         print("  loading NLP model (spaCy)...", end=" ", flush=True)
-        self.text_processor = TextProcessor()
+        # Lemmatizing the chunked corpus is the dominant (per-token) cost of a
+        # cold start, so spread it across CPU cores via spaCy's nlp.pipe workers.
+        # Leave 2 cores free for the OS/UI. The fork-after-threads deadlock this
+        # used to trigger at "fitting LSI" is neutralised by the single-thread
+        # BLAS pinning at the top of this module.
+        n_process = max(1, (os.cpu_count() or 2) - 2)
+        self.text_processor = TextProcessor(
+            config=TextProcessorConfig(batch_size=200, n_process=n_process)
+        )
         chunker = TextChunker(
             chunk_size=300,
             overlap=50,
@@ -284,6 +315,10 @@ class Pipeline:
 
     def _cold_start(self) -> None:
         """Parse corpus, fit LSI, persist artifacts for future warm starts."""
+        import time as _time
+        t_total = _time.monotonic()
+
+        t0 = _time.monotonic()
         print("  reading documents from data/raw/...", end=" ", flush=True)
         documents = _load_from_raw_dir()
         if not documents:
@@ -294,25 +329,30 @@ class Pipeline:
                 "try again."
             )
         self._source_label = f"data/raw/ ({len(documents)} docs)"
-        print("done")
+        print(f"done  ({_time.monotonic() - t0:.1f}s)")
 
         print(f"  source  : {self._source_label}")
+        t0 = _time.monotonic()
         print("  indexing...", end=" ", flush=True)
         self.corpus = self.indexer.build(documents)
-        print("done")
+        print(f"done  ({_time.monotonic() - t0:.1f}s)")
 
         stats = IndexerService.stats(self.corpus)
         n_docs = stats["n_documents"]
         n_terms = stats["n_terms"]
 
+        t0 = _time.monotonic()
         print(f"  fitting LSI (n_components=100)...", end=" ", flush=True)
         self.retriever.fit(self.corpus)
-        print(f"done  [{n_docs} docs, {n_terms} terms]")
+        print(f"done  [{n_docs} docs, {n_terms} terms]  ({_time.monotonic() - t0:.1f}s)")
 
+        t0 = _time.monotonic()
         print("  saving model to disk...", end=" ", flush=True)
         Path(_MODELS_DIR).mkdir(parents=True, exist_ok=True)
         self.lsi.save(_MODELS_DIR)
-        print("done  (future startups will be fast)")
+        print(f"done  (future startups will be fast)  ({_time.monotonic() - t0:.1f}s)")
+
+        print(f"  total cold start: {_time.monotonic() - t_total:.1f}s")
 
         # Register optional plugins now that the fitted vocabulary is available.
         self._register_plugins()

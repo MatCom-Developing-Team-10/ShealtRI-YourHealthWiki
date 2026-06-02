@@ -96,7 +96,7 @@ def extract_pdf(
         docs.append({
             "doc_id": f"{book_name}_p{page_num}",
             "text": text,
-            "url": "",
+            "url": str(pdf_path),
             "metadata": {
                 "title": book_name,
                 "source": "pdf",
