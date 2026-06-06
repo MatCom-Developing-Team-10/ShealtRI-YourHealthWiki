@@ -119,12 +119,17 @@ ShealtRI-YourHealthWiki/
 
 ## Instalación
 
-### Requisitos previos
+Sigue estos pasos en orden: **(1)** requisitos → **(2)** clonar e instalar → **(3)** configurar la
+clave de Groq → **(4)** ejecutar. 
 
-- Python 3.11+
-- (Opcional) Docker y Docker Compose
+### 1. Requisitos previos
 
-### Local
+- **Python 3.11+** (verifica con `python --version`)
+- **Git**
+- (Opcional) **Docker** y **Docker Compose**, si prefieres no instalar dependencias en tu máquina
+- Una **clave de API de Groq** (gratuita) para habilitar el RAG — ver [paso 3](#3-configurar-la-clave-de-groq-api-key).
+
+### 2. Instalación local
 
 ```bash
 # Clonar el repositorio
@@ -149,18 +154,90 @@ python -m spacy download es_core_news_md
 
 > En Linux/macOS existe además el script `setup_local.sh` que automatiza estos pasos.
 
-### Variables de entorno
+### 3. Configurar la clave de Groq (API key)
 
-Copia `.env.example` a `.env` y completa la clave de Groq para habilitar el RAG:
+> ⚠️ **No confundir Groq con "Grok".** El proyecto usa **Groq** (`console.groq.com`), una
+
+#### Cómo conseguir la clave (paso a paso)
+
+1. Entra en **<https://console.groq.com>** y crea una cuenta (puedes registrarte con Google/GitHub).
+2. En el menú lateral abre **API Keys**, o ve directamente a **<https://console.groq.com/keys>**.
+3. Pulsa **Create API Key**, dale un nombre (p. ej. `shealtri-dev`) y créala.
+4. **Copia la clave en ese momento** — empieza por `gsk_...` y solo se muestra una vez. Si la pierdes,
+   tendrás que generar otra.
+
+# ¿Por qué es importante esta clave?
+
+El módulo **RAG** es el que convierte los documentos recuperados en una **respuesta redactada y
+adaptada al perfil del usuario** (paciente / estudiante / profesional). Esa generación se hace
+llamando a un LLM servido por Groq. En concreto:
+
+- **Con `GROQ_API_KEY` configurada:** el sistema genera respuestas en lenguaje natural, coherentes y
+  ajustadas al nivel del usuario, citando los documentos recuperados. Es el comportamiento completo
+  del sistema y el que se espera ver en la defensa.
+- **Sin la clave:** el sistema **no se rompe** — la recuperación LSI, el ranking híbrido, la búsqueda
+  web y el recomendador siguen funcionando con normalidad —, pero el RAG cae en una **respuesta de
+  plantilla** (`template_fallback`) mucho menos útil, que simplemente arma un texto fijo a partir de
+  los fragmentos. Para apreciar el valor real del sistema, **configura la clave.**
+
+La clave de Groq tiene un **nivel gratuito** suficiente para desarrollo y demos.
+
+#### Cómo insertarla en el proyecto
+
+El proyecto lee la clave desde la variable de entorno **`GROQ_API_KEY`**. La forma recomendada es un
+archivo `.env` en la raíz del repositorio (lo leen tanto la app local como `docker-compose`):
 
 ```bash
-cp .env.example .env
-# Edita .env y define:
-# GROQ_API_KEY=tu_clave   (gratis en https://console.groq.com/keys)
+# 1. Copia la plantilla
+cp .env.example .env        # Windows PowerShell: copy .env.example .env
+
+# 2. Edita .env y pega tu clave (sin comillas ni espacios alrededor del =)
+GROQ_API_KEY=gsk_tu_clave_real_aqui
+
+# 3. (Opcional) elige otro modelo; por defecto es llama-3.1-8b-instant
+GROQ_MODEL=llama-3.1-8b-instant
 ```
 
-Sin `GROQ_API_KEY` el sistema sigue funcionando, pero el RAG cae en una respuesta de plantilla
-menos útil. El resto de la recuperación (LSI, ranking, búsqueda) no requiere la clave.
+Variables que entiende el sistema (ver [modules/rag/service.py](modules/rag/service.py)):
+
+| Variable       | Obligatoria | Por defecto            | Descripción                              |
+|----------------|-------------|------------------------|------------------------------------------|
+| `GROQ_API_KEY` | Para el RAG | — (vacía → fallback)   | Tu clave de Groq (`gsk_...`).            |
+| `GROQ_MODEL`   | No          | `llama-3.1-8b-instant` | Identificador del modelo de Groq a usar. |
+
+> 🔒 **Seguridad:** el archivo `.env` **nunca** debe subirse al repositorio (ya está en `.gitignore`).
+> No pegues tu clave en el código, en commits ni en capturas. Si se filtra una clave, revócala desde
+> la consola de Groq y genera una nueva.
+
+**Alternativa sin `.env`** — exportar la variable en la sesión actual de la terminal:
+
+```bash
+# Linux / macOS
+export GROQ_API_KEY=gsk_tu_clave_real_aqui
+# Windows (PowerShell)
+$env:GROQ_API_KEY = "gsk_tu_clave_real_aqui"
+```
+
+Para comprobar que la clave se cargó, al iniciar verás en los logs el mensaje
+`Groq API initialized (model: ...)`. Si en su lugar las respuestas salen como `template_fallback`,
+la clave no se está leyendo (revisa el nombre de la variable y que `.env` esté en la raíz).
+
+### 4. Ejecutar
+
+Una vez instalado y configurada la clave, arranca la interfaz web o la CLI (detalles y más opciones
+en la sección [Uso](#uso)):
+
+```bash
+# Interfaz web (FastAPI) → http://localhost:8501
+uvicorn ui.app:app --host 0.0.0.0 --port 8501
+
+# o la CLI interactiva
+python cli.py
+```
+
+> Con Docker no necesitas el entorno virtual ni instalar dependencias: basta con tener el `.env`
+> con tu `GROQ_API_KEY` y ejecutar `docker-compose up --build -d` (ver sección [Docker](#docker)).
+> `docker-compose` inyecta automáticamente las variables del `.env` en el contenedor.
 
 ---
 
